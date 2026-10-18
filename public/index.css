@@ -1,0 +1,204 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: white;
+  color: black;
+  font-family: sans-serif;
+  line-height: 1.6;
+}
+
+header {
+  padding: 20px 24px;
+}
+
+header > span {
+  font-size: 32px;
+  font-weight: bold;
+}
+
+.server-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+#check-server {
+  padding: 4px 12px;
+  border: 1px solid black;
+  border-radius: 4px;
+  background: white;
+  color: black;
+  font: inherit;
+  cursor: pointer;
+}
+
+#check-server:disabled {
+  cursor: wait;
+}
+
+nav {
+  display: flex;
+  justify-content: flex-start;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+nav button {
+  position: relative;
+  margin-bottom: -1px;
+  min-width: 72px;
+  padding: 10px 20px;
+  border: 1px solid black;
+  border-radius: 12px 12px 0 0;
+  background: white;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+nav button[aria-pressed="true"] {
+  z-index: 1;
+  border-bottom-color: white;
+  font-weight: bold;
+}
+
+nav button:focus-visible {
+  outline: 2px solid black;
+  outline-offset: -5px;
+}
+
+main {
+  margin: 0 24px 24px;
+}
+
+.panel {
+  min-height: 360px;
+  padding: 24px;
+  border: 1px solid black;
+}
+
+.panel p {
+  margin: 12px 0 0;
+}
+
+#connectwifi p {
+  margin-top: 0;
+}
+
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: normal;
+}
+
+.image-stages {
+  display: flex;
+  align-items: flex-start;
+  gap: 24px;
+  margin-top: 24px;
+}
+
+.image-upload,
+.ai-result {
+  flex: 0 0 20%;
+  width: 20%;
+  min-width: 0;
+}
+
+.upload-box,
+.result-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 300px;
+  overflow: hidden;
+  padding: 16px;
+  width: 100%;
+  min-width: 0;
+  border: 1px dashed black;
+}
+
+.upload-box {
+  cursor: pointer;
+}
+
+.upload-box > span,
+.result-box > span {
+  flex-shrink: 0;
+}
+
+#image-input,
+#send-to-ai {
+  display: block;
+  margin-top: 12px;
+  max-width: 100%;
+  font: inherit;
+}
+
+#send-to-ai {
+  background: white;
+  color: black;
+  border: 1px solid black;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+#send-to-ai:disabled {
+  cursor: not-allowed;
+}
+
+.image-upload:focus-within .upload-box {
+  outline: 2px solid black;
+  outline-offset: 3px;
+}
+
+#image-preview,
+#ai-preview {
+  display: block;
+  max-width: 100%;
+  width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  height: 0;
+  object-fit: contain;
+}
+
+#image-preview[hidden],
+#ai-preview[hidden] {
+  display: none;
+}
+
+@media (max-width: 480px) {
+  .image-stages {
+    flex-direction: column;
+  }
+
+  .image-upload,
+  .ai-result {
+    flex-basis: auto;
+    width: 100%;
+  }
+  header {
+    padding: 16px 12px;
+  }
+
+  main {
+    margin: 0 12px 12px;
+  }
+
+  nav button {
+    min-width: 56px;
+    padding: 10px 14px;
+  }
+
+  .panel {
+    padding: 20px 16px;
+  }
+}

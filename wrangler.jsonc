@@ -1,8 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "plotsender",
+  "main": "server/main.py",
+  "compatibility_flags": ["python_workers"],
   "compatibility_date": "2026-10-17",
   "assets": {
-    "directory": "./public"
+    "directory": "./public",
+    "run_worker_first": ["/api/*"]
   }
 }

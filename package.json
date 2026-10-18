@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run"
+    "dev": "uv run pywrangler dev",
+    "deploy": "uv run pywrangler deploy",
+    "check": "uv run pywrangler deploy --dry-run"
   },
   "devDependencies": {
     "wrangler": "^4.151.1"
