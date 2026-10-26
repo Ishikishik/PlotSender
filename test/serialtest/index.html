@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Serial Test</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    #log { width: 100%; height: 300px; font-family: monospace; }
+    input[type=text] { width: 300px; }
+  </style>
+</head>
+<body>
+  <h3>ESP32-S3 Web Serial Test</h3>
+  <button id="btnConnect">接続</button>
+  <button id="btnDisconnect">切断</button>
+  <span id="status">未接続</span>
+  <p>
+    <input type="text" id="txt" placeholder="送信する文字">
+    <button id="btnSend">送信</button>
+  </p>
+  <textarea id="log" readonly></textarea>
+
+  <script src="serial.js"></script>
+  <script>
+    const log = (s) => {
+      const el = document.getElementById("log");
+      el.value += s + "\n";
+      el.scrollTop = el.scrollHeight;
+    };
+    const setStatus = () =>
+      document.getElementById("status").textContent = serialIsConnected() ? "接続中" : "未接続";
+
+    onSerialReceive((line) => log("受信: " + line));
+
+    document.getElementById("btnConnect").onclick = async () => {
+      try { await serialConnect(115200); log("接続しました"); await serialSend("TOTP"); }  // 接続直後に今の分のトークンを要求
+      catch (e) { log("接続エラー: " + e.message); }
+      setStatus();
+    };
+    document.getElementById("btnDisconnect").onclick = async () => {
+      await serialDisconnect(); log("切断しました"); setStatus();
+    };
+    const send = async () => {
+      const t = document.getElementById("txt");
+      try { await serialSend(t.value); log("送信: " + t.value); t.value = ""; }
+      catch (e) { log("送信エラー: " + e.message); }
+    };
+    document.getElementById("btnSend").onclick = send;
+    document.getElementById("txt").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  </script>
+</body>
+</html>

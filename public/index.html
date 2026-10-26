@@ -6,6 +6,7 @@
   <title>PlotSender</title>
   <link rel="stylesheet" href="./index.css">
   <script defer src="./js/main.js"></script>
+  <script defer src="./js/serial.js"></script>
   <script defer src="./js/photo.js"></script>
   <script defer src="./js/health.js"></script>
 </head>
@@ -44,7 +45,10 @@
           <span>AI処理の結果</span>
           <img id="ai-preview" alt="AIで加工した画像" hidden>
         </div>
-        <button id="send-to-ai" type="button" disabled title="AI送信機能は準備中です">Send to AI</button>
+        <button id="connect-esp" type="button">ESP32と接続</button>
+        <span id="esp-status" role="status"></span>
+        <button id="send-to-ai" type="button" disabled>Send to AI</button>
+        <p id="ai-status" role="status" aria-live="polite"></p>
       </div>
       </div>
     </section>
