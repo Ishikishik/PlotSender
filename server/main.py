@@ -1,7 +1,7 @@
 """PlotSender の API。Cloudflare の Python Workers で実行する。
 
 /api/health … サーバーの時刻を返す（動作確認用）
-/api/ai     … 画像と TOTP トークンを受け取り、トークンが正しければ AI 処理の結果を返す
+/api/ai     … 画像と TOTP トークンを受け取り、トークンが正しければ AI で線画にした画像を返す
 """
 
 from datetime import datetime, timezone
@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 
 from workers import Response, WorkerEntrypoint
 
-from ai import process_image
+from ai import AIError, process_image
 from auth import verify_totp
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 受け付ける画像は10MBまで
@@ -64,5 +64,14 @@ class Default(WorkerEntrypoint):
         if not image.content_type.startswith("image/"):
             return error("画像ファイルではありません", 415)
 
-        data, content_type = await process_image(await image.bytes(), image.content_type)
+        api_token = getattr(self.env, "REPLICATE_API_TOKEN", None)
+        if not api_token:
+            return error("サーバーに REPLICATE_API_TOKEN が設定されていません", 500)
+
+        try:
+            data, content_type = await process_image(
+                await image.bytes(), image.content_type, api_token
+            )
+        except AIError as e:
+            return error(str(e), 502)
         return Response(data, headers={"Content-Type": content_type, "Cache-Control": "no-store"})

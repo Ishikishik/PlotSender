@@ -67,7 +67,7 @@ async function sendPhotoToAI() {
   sending = true;
   imageInput.disabled = true;
   updateSendButton();
-  aiStatus.textContent = "写真を送信しています…";
+  aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）";
 
   try {
     const response = await fetch("/api/ai", {
@@ -78,7 +78,9 @@ async function sendPhotoToAI() {
       throw new Error("トークンが一致しませんでした。ESP32 の接続と時刻を確認してください。");
     }
     if (!response.ok) {
-      throw new Error(`送信に失敗しました（HTTP ${response.status}）。`);
+      // サーバーが {"error": "..."} を返していれば、その内容を表示する。
+      const detail = await response.json().then((j) => j.error).catch(() => null);
+      throw new Error(`送信に失敗しました（HTTP ${response.status}）${detail ? "：" + detail : "。"}`);
     }
     // 返ってきた画像を「AI処理の結果」に表示する。
     if (aiPreviewUrl) URL.revokeObjectURL(aiPreviewUrl);
