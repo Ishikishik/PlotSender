@@ -8,6 +8,7 @@
   <script defer src="./js/main.js"></script>
   <script defer src="./js/serial.js"></script>
   <script defer src="./js/library.js"></script>
+  <script defer src="./js/normalize.js"></script>
   <script defer src="./js/vectorize.js"></script>
   <script defer src="./js/photo.js"></script>
   <script defer src="./js/health.js"></script>
@@ -57,8 +58,15 @@
           <span>プロッタ再現</span>
           <canvas id="plot-preview" hidden></canvas>
         </div>
+        <fieldset class="paper-settings">
+          <legend>紙の設定</legend>
+          <label>幅 [mm]<input id="paper-width" type="number" min="1" step="1" value="91"></label>
+          <label>高さ [mm]<input id="paper-height" type="number" min="1" step="1" value="55"></label>
+          <label>これより短い線を削除 [mm]<input id="min-stroke" type="number" min="0" step="0.1" value="0.4"></label>
+        </fieldset>
         <button id="download-plot" type="button" disabled>JSON保存</button>
         <p id="plot-status" role="status" aria-live="polite"></p>
+        <p id="paper-status" role="status" aria-live="polite"></p>
       </div>
       </div>
     </section>

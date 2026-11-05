@@ -8,3 +8,7 @@
 - connectwifiシステム
 
 esp側のサンプルコードは[こちら](test/serialtest/serialtest)
+
+cloudflareで設定する鍵とか
+- espと共通にする秘密鍵(TOTP_KEY)
+- AIのapiキー(REPLICATE_API_TOKEN)

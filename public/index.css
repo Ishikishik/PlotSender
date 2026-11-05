@@ -163,6 +163,28 @@ h1 {
   outline-offset: 3px;
 }
 
+.paper-settings {
+  margin: 12px 0 0;
+  padding: 8px 10px 10px;
+  border: 1px solid black;
+  border-radius: 4px;
+  min-width: 0;
+}
+
+.paper-settings label {
+  display: block;
+  margin-top: 6px;
+}
+
+.paper-settings input {
+  display: block;
+  width: 100%;
+  padding: 2px 4px;
+  border: 1px solid black;
+  border-radius: 4px;
+  font: inherit;
+}
+
 #image-preview,
 #ai-preview,
 #plot-preview {

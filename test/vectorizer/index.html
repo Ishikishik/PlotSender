@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vectorizer Tuner</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="toolbar">
+  <strong>Vectorizer Tuner</strong>
+  <label class="file">画像を選ぶ<input id="fileInput" type="file" accept="image/*"></label>
+  <label>縮小 最大
+    <select id="maxSize">
+      <option value="0">原寸</option>
+      <option value="1024" selected>1024px</option>
+      <option value="768">768px</option>
+      <option value="512">512px</option>
+    </select>
+  </label>
+  <button id="runButton" type="button" disabled>実行</button>
+  <label><input id="autoRun" type="checkbox"> 設定を変えたら自動で実行</label>
+  <button id="downloadButton" type="button" disabled>JSON保存</button>
+  <span id="status" class="status">OpenCV.js を読み込み中…</span>
+</header>
+
+<div class="layout">
+  <aside class="side">
+    <section class="panel">
+      <h2>処理時間 <span id="timeTotal" class="muted"></span></h2>
+      <table id="timeTable" class="times"></table>
+      <h3>履歴（新しい順）</h3>
+      <ol id="history" class="history"></ol>
+    </section>
+
+    <section class="panel">
+      <h2>結果</h2>
+      <pre id="summary" class="summary">実行後に表示されます</pre>
+    </section>
+
+    <section class="panel">
+      <h2>設定
+        <span class="actions">
+          <button id="copySettings" type="button">JSONをコピー</button>
+          <button id="resetSettings" type="button">初期値に戻す</button>
+        </span>
+      </h2>
+      <p class="muted">初期値から変えた項目は色が付きます。値はこのブラウザに保存されます。</p>
+      <div id="settingsForm"></div>
+    </section>
+  </aside>
+
+  <main class="grid" id="grid">
+    <figure><figcaption>処理前</figcaption><canvas id="canvasSrc"></canvas></figure>
+    <figure><figcaption>二値化（ゴミ除去後）</figcaption><canvas id="canvasBin"></canvas></figure>
+    <figure><figcaption>距離変換</figcaption><canvas id="canvasDist"></canvas></figure>
+    <figure><figcaption>細線化</figcaption><canvas id="canvasThin"></canvas></figure>
+    <figure><figcaption>端点接続</figcaption><canvas id="canvasConnect"></canvas></figure>
+    <figure><figcaption>線分割</figcaption><canvas id="canvasSegments"></canvas></figure>
+    <figure><figcaption>ベジェ中心線</figcaption><canvas id="canvasBezier"></canvas></figure>
+    <figure><figcaption>太さつき再現</figcaption><canvas id="canvasWidth"></canvas></figure>
+    <figure><figcaption>塗りつぶし候補</figcaption><canvas id="canvasFill"></canvas></figure>
+    <figure><figcaption>プロッタ再現</figcaption><canvas id="canvasEmulator"></canvas></figure>
+    <figure><figcaption>差分（赤=描けていない／青=はみ出し）</figcaption><canvas id="canvasDiff"></canvas></figure>
+    <figure>
+      <figcaption>描画順プレビュー</figcaption>
+      <input id="orderSlider" type="range" min="0" max="0" value="0" disabled>
+      <div id="orderMeta" class="muted mono">実行後に表示されます</div>
+      <canvas id="canvasOrder"></canvas>
+    </figure>
+  </main>
+</div>
+
+<script src="library.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
