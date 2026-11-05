@@ -84,10 +84,12 @@ async function sendPhotoToAI() {
     }
     // 返ってきた画像を「AI処理の結果」に表示する。
     if (aiPreviewUrl) URL.revokeObjectURL(aiPreviewUrl);
-    aiPreviewUrl = URL.createObjectURL(await response.blob());
+    const aiBlob = await response.blob();
+    aiPreviewUrl = URL.createObjectURL(aiBlob);
     aiPreview.src = aiPreviewUrl;
     aiPreview.hidden = false;
     aiStatus.textContent = "AI処理の結果を表示しました。";
+    vectorizeImage(aiBlob);   // 続けてプロッタ用データを作る（vectorize.js）
   } catch (error) {
     aiStatus.textContent = error instanceof TypeError
       ? "通信エラーで送信を確認できませんでした。"

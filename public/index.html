@@ -7,6 +7,8 @@
   <link rel="stylesheet" href="./index.css">
   <script defer src="./js/main.js"></script>
   <script defer src="./js/serial.js"></script>
+  <script defer src="./js/library.js"></script>
+  <script defer src="./js/vectorize.js"></script>
   <script defer src="./js/photo.js"></script>
   <script defer src="./js/health.js"></script>
 </head>
@@ -49,6 +51,14 @@
         <span id="esp-status" role="status"></span>
         <button id="send-to-ai" type="button" disabled>Send to AI</button>
         <p id="ai-status" role="status" aria-live="polite"></p>
+      </div>
+      <div class="plot-result">
+        <div class="result-box">
+          <span>プロッタ再現</span>
+          <canvas id="plot-preview" hidden></canvas>
+        </div>
+        <button id="download-plot" type="button" disabled>JSON保存</button>
+        <p id="plot-status" role="status" aria-live="polite"></p>
       </div>
       </div>
     </section>
