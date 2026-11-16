@@ -238,17 +238,14 @@ function removeSmallComponents(bin, minArea) {
   const keep = new Array(count).fill(false);
 
   for (let label = 1; label < count; label++) {
-    const area = stats.intPtr(label, cv.CC_STAT_AREA)[0];
+    const area = pixelAt(stats, cv.CC_STAT_AREA, label);
     keep[label] = area >= minArea;
   }
 
-  for (let y = 0; y < labels.rows; y++) {
-    for (let x = 0; x < labels.cols; x++) {
-      const label = labels.intPtr(y, x)[0];
-      if (keep[label]) {
-        out.ucharPtr(y, x)[0] = 255;
-      }
-    }
+  const labelData = pixels(labels).data;
+  const outData = pixels(out).data;
+  for (let i = 0; i < labelData.length; i++) {
+    if (keep[labelData[i]]) outData[i] = 255;
   }
 
   labels.delete();
@@ -346,8 +343,9 @@ function zhangSuenFast(src) {
   }
 
   const out = new cv.Mat(rows, cols, cv.CV_8UC1);
+  const outData = out.data;   // out.data は読むたびに WASM を呼ぶので、一度だけ取り出す
   for (let i = 0; i < size; i++) {
-    out.data[i] = img[i] ? 255 : 0;
+    outData[i] = img[i] ? 255 : 0;
   }
 
   return out;
@@ -726,11 +724,11 @@ function extractFillRegions(bin, dist, settings) {
   const fills = [];
 
   for (let label = 1; label < count; label++) {
-    const area = stats.intPtr(label, cv.CC_STAT_AREA)[0];
-    const left = stats.intPtr(label, cv.CC_STAT_LEFT)[0];
-    const top = stats.intPtr(label, cv.CC_STAT_TOP)[0];
-    const width = stats.intPtr(label, cv.CC_STAT_WIDTH)[0];
-    const height = stats.intPtr(label, cv.CC_STAT_HEIGHT)[0];
+    const area = pixelAt(stats, cv.CC_STAT_AREA, label);
+    const left = pixelAt(stats, cv.CC_STAT_LEFT, label);
+    const top = pixelAt(stats, cv.CC_STAT_TOP, label);
+    const width = pixelAt(stats, cv.CC_STAT_WIDTH, label);
+    const height = pixelAt(stats, cv.CC_STAT_HEIGHT, label);
     const density = area / Math.max(1, width * height);
 
     if (area < settings.fillMinArea || density < settings.fillMinDensity) continue;
@@ -785,7 +783,7 @@ function componentWidthMetrics(labels, dist, label, left, top, width, height) {
 
   for (let y = top; y < top + height; y++) {
     for (let x = left; x < left + width; x++) {
-      if (labels.intPtr(y, x)[0] !== label) continue;
+      if (pixelAt(labels, x, y) !== label) continue;
 
       const w = localWidth(dist, x, y);
       sum += w;
@@ -800,12 +798,10 @@ function componentWidthMetrics(labels, dist, label, left, top, width, height) {
 function componentMask(labels, label) {
   const mask = cv.Mat.zeros(labels.rows, labels.cols, cv.CV_8UC1);
 
-  for (let y = 0; y < labels.rows; y++) {
-    for (let x = 0; x < labels.cols; x++) {
-      if (labels.intPtr(y, x)[0] === label) {
-        mask.ucharPtr(y, x)[0] = 255;
-      }
-    }
+  const labelData = pixels(labels).data;
+  const maskData = pixels(mask).data;
+  for (let i = 0; i < labelData.length; i++) {
+    if (labelData[i] === label) maskData[i] = 255;
   }
 
   return mask;
@@ -915,8 +911,8 @@ function protectedWidth(width, settings) {
 }
 
 function isSafeFillPixel(labels, dist, label, x, y, safety) {
-  if (labels.intPtr(y, x)[0] !== label) return false;
-  return dist.floatPtr(y, x)[0] >= safety;
+  if (pixelAt(labels, x, y) !== label) return false;
+  return pixelAt(dist, x, y) >= safety;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1341,6 +1337,26 @@ function evalWidthCurve(curve, t) {
   return u * u * u * curve.w0 + 3 * u * u * t * curve.c1.w + 3 * u * t * t * curve.c2.w + t * t * t * curve.w1;
 }
 
+// Mat の画素を直接読むための配列と大きさを返す（1 チャンネルの Mat 用）。
+// mat.cols や mat.ucharPtr() は呼ぶたびに JS と WASM の境界を越えるので、画素ごとに呼ぶと遅い。
+// 最初の 1 回だけ取り出して Mat に覚えさせ、以降は data[y * cols + x] で読む。
+// 注意: 中身が入った後の Mat に使うこと（空の Mat に使うと、空の配列を覚えてしまう）。
+function pixels(mat) {
+  let p = mat._pixels;
+  // メモリ拡張で配列が無効になった場合（length が 0 になる）は取り直す
+  if (!p || p.data.length === 0) {
+    const type = mat.type();
+    const data = type === cv.CV_32SC1 ? mat.data32S : type === cv.CV_32FC1 ? mat.data32F : mat.data;
+    p = mat._pixels = { data, cols: mat.cols, rows: mat.rows };
+  }
+  return p;
+}
+
+function pixelAt(mat, x, y) {
+  const p = pixels(mat);
+  return p.data[y * p.cols + x];
+}
+
 function neighborsOf(mat, x, y) {
   const out = [];
   for (const [dx, dy] of DIRS_8) {
@@ -1370,16 +1386,17 @@ function edgeKey(cols, a, b) {
 }
 
 function isWhite(mat, x, y) {
-  return mat.ucharPtr(y, x)[0] > 0;
+  return pixelAt(mat, x, y) > 0;
 }
 
 function inBounds(mat, x, y) {
-  return x >= 0 && x < mat.cols && y >= 0 && y < mat.rows;
+  const p = pixels(mat);
+  return x >= 0 && x < p.cols && y >= 0 && y < p.rows;
 }
 
 function localWidth(dist, x, y) {
   if (!inBounds(dist, x, y)) return 1;
-  return dist.floatPtr(y, x)[0] * 2;
+  return pixelAt(dist, x, y) * 2;
 }
 
 function cumulativeLengths(points) {

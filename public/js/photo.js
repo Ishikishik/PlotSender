@@ -11,7 +11,8 @@ const espStatus = document.querySelector("#esp-status");
 let previewUrl = null;
 let imageReady = false;
 let sending = false;
-let latestToken = null;   // ESP32 から最後に届いた6桁のトークン
+let latestToken = null;   // ESP32 から最後に届いた6桁のトークン、または QR のトークン
+let tokenKind = "serial"; // "serial"(Web Serial、1分ごと)か "qr"(QR、15分以内・1回だけ)
 let aiPreviewUrl = null;
 
 function updateSendButton() {
@@ -55,26 +56,68 @@ imagePreview.addEventListener("error", () => {
   imageStatus.textContent = "画像を読み込めませんでした。JPEGやPNGなど、別の画像を選んでください。";
 });
 
+// 送信する前に画像を縮小する設定。
+// スマホの写真は数MBあるので、そのまま送ると会場の回線では時間がかかる。
+// AI が出す線画は約100万画素なので、これ以上大きく送っても仕上がりは変わらない。
+const UPLOAD_MAX_SIZE = 1536;       // 長辺がこれより大きければ縮小する（px）
+const UPLOAD_JPEG_QUALITY = 0.85;
+const UPLOAD_KEEP_BYTES = 500 * 1024;   // 小さくて軽い画像はそのまま送る
+
+// 表示中の画像を縮小して JPEG にする。うまくいかなければ元のファイルを返す。
+// <img> から描くので、写真の向き（EXIF）はブラウザが直した状態になる。
+async function shrinkForUpload(file) {
+  const width = imagePreview.naturalWidth;
+  const height = imagePreview.naturalHeight;
+  const scale = Math.min(1, UPLOAD_MAX_SIZE / Math.max(width, height));
+  if (scale === 1 && file.size <= UPLOAD_KEEP_BYTES) return file;
+
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";           // JPEG は透明を持てないので、透明部分は白にする
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(imagePreview, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", UPLOAD_JPEG_QUALITY));
+    // 変換できなかったときと、かえって大きくなったときは元のまま送る
+    return blob && blob.size < file.size ? blob : file;
+  } catch (error) {
+    console.error(error);
+    return file;
+  }
+}
+
+const formatMb = bytes => (bytes / 1024 / 1024).toFixed(1) + "MB";
+
 // 選択した画像を自分のサーバーに送信する。
 async function sendPhotoToAI() {
   const file = imageInput.files[0];
   if (sending || !imageReady || !file) return;
 
-  const formData = new FormData();
-  formData.append("image", file);
-  formData.append("token", latestToken);
-
   sending = true;
   imageInput.disabled = true;
   updateSendButton();
-  aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）";
+  aiStatus.textContent = "画像を準備しています…";
+  loadOpenCv().catch(() => {});   // AI を待つ間に OpenCV.js を読み込んでおく（失敗しても変換時にもう一度試す）
 
   try {
+    const upload = await shrinkForUpload(file);
+    const formData = new FormData();
+    formData.append("image", upload, upload === file ? file.name : "photo.jpg");
+    formData.append("token", latestToken);
+    formData.append("token_kind", tokenKind);
+    aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）" +
+      (upload === file ? "" : `［送信 ${formatMb(file.size)} → ${formatMb(upload.size)}］`);
     const response = await fetch("/api/ai", {
       method: "POST",
       body: formData,
     });
     if (response.status === 401) {
+      if (tokenKind === "qr") {
+        const detail = await response.json().then((j) => j.error).catch(() => null);
+        throw new Error(detail || "QR のトークンが使えませんでした。新しい QR を読み取ってください。");
+      }
       throw new Error("トークンが一致しませんでした。ESP32 の接続と時刻を確認してください。");
     }
     if (!response.ok) {
@@ -89,6 +132,7 @@ async function sendPhotoToAI() {
     aiPreview.src = aiPreviewUrl;
     aiPreview.hidden = false;
     aiStatus.textContent = "AI処理の結果を表示しました。";
+    if (tokenKind === "qr") useUpQrToken();
     vectorizeImage(aiBlob);   // 続けてプロッタ用データを作る（vectorize.js）
   } catch (error) {
     aiStatus.textContent = error instanceof TypeError
@@ -108,6 +152,7 @@ onSerialReceive((line) => {
   const m = line.match(/^TOTP (\d{6})$/);
   if (!m) return;
   latestToken = m[1];
+  tokenKind = "serial";
   espStatus.textContent = "ESP32 接続中（トークン受信済み）";
   updateSendButton();
 });
@@ -121,3 +166,22 @@ connectEspButton.addEventListener("click", async () => {
     espStatus.textContent = `接続できませんでした（${error.message}）`;
   }
 });
+
+// パンタグラフの画面の QR から来たとき(/T/123456 → /?mode=b&token=123456)は、そのトークンを使う。
+// QR のトークンは 15 分以内に AI 生成 1 回だけ使える(使い切り)。
+const qrToken = new URLSearchParams(location.search).get("token");
+if (qrToken && /^\d{6}$/.test(qrToken)) {
+  latestToken = qrToken;
+  tokenKind = "qr";
+  espStatus.textContent = "QR のトークンを使います（15分以内に AI 生成 1 回）";
+  updateSendButton();
+}
+
+// 使い終わった QR のトークンを消す(URL からも消して、再読み込みで使おうとしないようにする)
+function useUpQrToken() {
+  latestToken = null;
+  tokenKind = "serial";
+  history.replaceState(null, "", location.pathname + "?mode=b");
+  espStatus.textContent = "QR のトークンを使いました。もう一度 AI にかけるには、新しい QR を読み取ってください。";
+  updateSendButton();
+}

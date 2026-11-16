@@ -5,9 +5,8 @@
 const plotPreview = document.querySelector("#plot-preview");
 const plotStatus = document.querySelector("#plot-status");
 const downloadPlotButton = document.querySelector("#download-plot");
-const paperWidthInput = document.querySelector("#paper-width");
-const paperHeightInput = document.querySelector("#paper-height");
-const minStrokeInput = document.querySelector("#min-stroke");
+// 紙の設定は固定(はがき 150 × 105 mm)。この長さより短い線は描かない
+const PAPER_OPTIONS = { paperWidth: 150, paperHeight: 105, minStrokeMm: 0.4 };
 const paperStatus = document.querySelector("#paper-status");
 
 const VECTORIZE_MAX_SIZE = 1024;   // これより大きい画像は縮小してから処理する
@@ -119,22 +118,11 @@ async function vectorizeImage(blob) {
   }
 }
 
-// 入力欄から紙の設定を読む。正しい値でなければ null を返す。
-function readPaperOptions() {
-  const paperWidth = Number(paperWidthInput.value);
-  const paperHeight = Number(paperHeightInput.value);
-  const minStrokeMm = Number(minStrokeInput.value);
-  if (!(paperWidth > 0 && paperHeight > 0 && minStrokeMm >= 0)) return null;
-  return { paperWidth, paperHeight, minStrokeMm };
-}
-
-// 紙の設定に合わせた出力サイズと線の本数を表示し、保存ボタンの状態を更新する。
+// 紙に合わせた出力サイズと線の本数を表示し、保存ボタンの状態を更新する。
 function updatePaperSummary() {
-  const options = readPaperOptions();
-  downloadPlotButton.disabled = !plotterResult || !options;
-  if (!options) {
-    paperStatus.textContent = "紙の幅と高さは 0 より大きく、削除する長さは 0 以上にしてください。";
-  } else if (!plotterResult) {
+  const options = PAPER_OPTIONS;
+  downloadPlotButton.disabled = !plotterResult;
+  if (!plotterResult) {
     paperStatus.textContent = "";
   } else {
     const { stats } = normalizeForPlotter(plotterResult, options);
@@ -144,14 +132,9 @@ function updatePaperSummary() {
   }
 }
 
-for (const input of [paperWidthInput, paperHeightInput, minStrokeInput]) {
-  input.addEventListener("input", updatePaperSummary);
-}
-
 downloadPlotButton.addEventListener("click", () => {
-  const options = readPaperOptions();
-  if (!plotterResult || !options) return;
-  const { data } = normalizeForPlotter(plotterResult, options);
+  if (!plotterResult) return;
+  const { data } = normalizeForPlotter(plotterResult, PAPER_OPTIONS);
   const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);

@@ -3,7 +3,9 @@ const workspace = document.querySelector("#workspace");
 const connectwifi = document.querySelector("#connectwifi");
 const modeTitle = document.querySelector("#mode-title");
 
-let currentTab = "a";
+// QR から来たときは ?mode=b(パンタグラフ)で開く
+const startTab = new URLSearchParams(location.search).get("mode");
+let currentTab = [...buttons].some((b) => b.dataset.tab === startTab) ? startTab : "a";
 
 function switchTab(tab) {
   currentTab = tab;
