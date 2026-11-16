@@ -11,6 +11,9 @@ const calDebug = document.querySelector("#cal-debug");
 
 let calRunning = false;
 let calScriptPromise = null;
+// 機械が今使っている補正データの番号(QR の URL に入っている。"0" はファームに入っている表)。
+// 「補正ありで描いた」ときは、サーバーの最新ではなく、この表に残りのずれを足す
+const calBase = new URLSearchParams(location.search).get("base");
 
 function updateCalButton() {
   calSend.disabled = calRunning || !calInput.files[0] || tokenKind !== "qr" || !latestToken;
@@ -31,21 +34,24 @@ function loadCalibrateScript() {
   return calScriptPromise;
 }
 
-// 今の補正データ(サーバーの最新。なければファームに入っている表)
-async function fetchCurrentCorrection() {
-  const r = await fetch("/api/correction", { cache: "no-store" });
-  if (r.ok) return r.json();
-  const d = await fetch("./correction_default.json", { cache: "no-store" });
-  if (!d.ok) throw new Error("今の補正データを読めませんでした");
-  return d.json();
+// 機械が今使っている補正データ(QR の番号で探す)
+async function fetchMachineCorrection() {
+  if (!calBase) throw new Error("機械が使っている補正データがわかりません。機械の画面の QR を読み取って開き直してください");
+  const url = calBase === "0" ? "./correction_default.json" : `/api/correction?id=${encodeURIComponent(calBase)}`;
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) {
+    throw new Error(`機械が使っている補正データ(番号 ${calBase})がサーバーにありません。` +
+                    "「Cal grid raw」で描いて「補正なしで描いた」で作り直してください");
+  }
+  return r.json();
 }
 
 async function showCurrentCorrection() {
   try {
-    const c = await fetchCurrentCorrection();
-    calCurrent.textContent = c.version || "不明";
+    const c = await fetchMachineCorrection();
+    calCurrent.textContent = `${c.version || "不明"}(番号 ${calBase})`;
   } catch {
-    calCurrent.textContent = "読めませんでした";
+    calCurrent.textContent = calBase ? `番号 ${calBase}(サーバーにありません)` : "不明(機械の QR から開くとわかります)";
   }
 }
 
@@ -71,7 +77,7 @@ async function sendCalibration() {
   try {
     calStatus.textContent = "計算の準備をしています…(初回は数秒かかります)";
     await Promise.all([loadOpenCv(), loadCalibrateScript()]);
-    const current = update ? await fetchCurrentCorrection() : null;
+    const current = update ? await fetchMachineCorrection() : null;
     const img = await loadImage(file);
     calStatus.textContent = "写真から格子を読み取っています…";
     await new Promise(r => setTimeout(r, 30));   // 表示を更新してから重い計算をする
@@ -93,12 +99,12 @@ async function sendCalibration() {
     const response = await fetch("/api/correction", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: latestToken, table: result.table }),
+      body: JSON.stringify({ token: latestToken, table: result.table, base: update ? calBase : "" }),
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `送信に失敗しました(HTTP ${response.status})`);
-    calStatus.textContent = `補正データを保存しました(${body.version})。パンタグラフは次に確認したときに読み込みます。`;
-    calCurrent.textContent = body.version;
+    calStatus.textContent = `補正データを保存しました(${body.version}、番号 ${body.id})。` +
+      "パンタグラフの Setting のタブを開くと読み込みます。次に「補正ありで描いた」で送るときは、機械の QR を読み直してください。";
     useUpQrToken();
   } catch (error) {
     console.error(error);

@@ -11,7 +11,7 @@ import json
 import math
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 from workers import Response, WorkerEntrypoint
 
@@ -33,6 +33,19 @@ def error(message: str, status: int, **headers) -> Response:
 
 
 CORRECTION_KEY = "correction:latest"
+CORRECTION_ID_PREFIX = "correction:id:"     # 番号ごとの補正データ(機械が使っている表を「更新」の元にするため)
+CORRECTION_COUNTER = "correction:counter"
+CORRECTION_KEEP_SEC = 90 * 24 * 3600         # 番号ごとの補正データを残す期間
+
+
+def base36(n: int) -> str:
+    digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    out = ""
+    while True:
+        n, r = divmod(n, 36)
+        out = digits[r] + out
+        if n == 0:
+            return out
 
 
 def check_table(t: dict) -> dict:
@@ -85,11 +98,14 @@ class Default(WorkerEntrypoint):
                 return mode, step
         return None, None
 
-    def qr_redirect(self, token):
-        # QR の URL は短くするため大文字のパスにしてある。
+    def qr_redirect(self, rest):
+        # QR の URL は短くするため大文字のパスにしてある: /T/<トークン>/<機械が使っている補正データの番号>
         # トークンの鍵から機械を決めて、そのタブを開く(ここではまだ使用済みにしない)。
+        token, _, base = rest.partition("/")
         mode, _ = self.find_qr_machine(token)
         location = f"/?mode={mode}&token={token}" if mode else "/?qr=invalid"
+        if mode and base.isalnum() and len(base) <= 8:
+            location += f"&base={base}"
         return Response("", status=302, headers={"Location": location, "Cache-Control": "no-store"})
 
     async def check_token(self, token, kind):
@@ -120,8 +136,11 @@ class Default(WorkerEntrypoint):
     async def correction(self, request):
         """GET: 最新の補正データ(なければ 404)。POST: {token, table} を受け取って最新として保存する。"""
         if request.method == "GET":
+            # ?id=番号 ならその番号の補正データ、なければ最新
             store = getattr(self.env, "KV", None)
-            text = await store.get(CORRECTION_KEY) if store is not None else None
+            want = parse_qs(urlsplit(request.url).query).get("id", [""])[0]
+            key = CORRECTION_ID_PREFIX + want if want.isalnum() else CORRECTION_KEY
+            text = await store.get(key) if store is not None else None
             if text is None:
                 return error("補正データはまだありません", 404, **{"Cache-Control": "no-store"})
             return Response(text, headers={"Content-Type": "application/json", "Cache-Control": "no-store"})
@@ -136,14 +155,17 @@ class Default(WorkerEntrypoint):
         ok, detail = await self.check_token(str(body.get("token", "")), "qr")
         if not ok:
             return error(detail, 401)
-        # いつの補正データかを付けて保存する(ESP32 の Setting タブに出る)。1 つ前のものも残しておく
+        # いつの補正データかと番号を付けて保存する(ESP32 の Setting タブと QR に出る)
         table["version"] = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
+        count = int(await self.env.KV.get(CORRECTION_COUNTER) or 0) + 1
+        await self.env.KV.put(CORRECTION_COUNTER, str(count))
+        table["id"] = base36(count)
+        table["base"] = str(body.get("base", ""))[:8]   # 更新のときに元にした番号(記録用)
         text = json.dumps(table, separators=(",", ":"))
-        previous = await self.env.KV.get(CORRECTION_KEY)
-        if previous is not None:
-            await self.env.KV.put(CORRECTION_KEY + ":previous", previous)
+        await self.env.KV.put(CORRECTION_ID_PREFIX + table["id"], text, expirationTtl=CORRECTION_KEEP_SEC)
         await self.env.KV.put(CORRECTION_KEY, text)
-        return Response.json({"ok": True, "version": table["version"]}, headers={"Cache-Control": "no-store"})
+        return Response.json({"ok": True, "version": table["version"], "id": table["id"]},
+                             headers={"Cache-Control": "no-store"})
 
     async def health(self, request):
         # 呼び出した時点のUTC時刻を返す。キャッシュせず毎回計算する。
