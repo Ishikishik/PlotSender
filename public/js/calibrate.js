@@ -33,6 +33,10 @@
     },
   };
 
+  // 格子のマスの真ん中に描く丸 [mm](firm/src/jobs/PlotTest.h の GRID_MARKS と同じ値)。線の番号を決める目印
+  const MARKS = [[-45, 90], [15, 130], [55, 100]];
+  const MARK_SEARCH_MM = 15;   // 丸を探す範囲(指令した位置からこれ以上ずれていると見つからない)
+
   const SCALE = 10;            // 真上から見た画像の 1mm あたりのピクセル数
   const POLY_DEGREE = 4;       // 往復のずれを見積もるときの多項式の次数
   const LOCAL_SIGMA_MM = 8;    // 表の各点の当てはめで、近くの交点に付ける重みの幅
@@ -323,6 +327,94 @@
     return result;
   }
 
+  // ================================================================ 丸(目印)
+  // 線をたどった跡を消したマスクから、指令した位置の近くにある小さな丸を探す。返り値: [{mark, at: [x, y] mm}]
+  function findMarks(mask, hTracks, vTracks, toPx, toMm) {
+    const rest = new Uint8Array(mask.d);
+    const R = Math.round(1.2 * SCALE), A = Math.ceil(TRACK_STEP_MM * SCALE / 2) + 1;
+    const clear = (u0, u1, v0, v1) => {
+      for (let v = Math.max(0, v0); v <= Math.min(mask.h - 1, v1); v++)
+        for (let u = Math.max(0, u0); u <= Math.min(mask.w - 1, u1); u++) rest[v * mask.w + u] = 0;
+    };
+    for (const tr of hTracks) for (const [t, c] of tr) clear(Math.round(t - A), Math.round(t + A), Math.round(c - R), Math.round(c + R));
+    for (const tr of vTracks) for (const [t, c] of tr) clear(Math.round(c - R), Math.round(c + R), Math.round(t - A), Math.round(t + A));
+
+    const found = [];
+    const seen = new Uint8Array(rest.length);
+    for (const mark of MARKS) {
+      const [cu, cv] = toPx(mark[0], mark[1]);
+      const W = MARK_SEARCH_MM * SCALE;
+      const u0 = Math.max(0, Math.round(cu - W)), u1 = Math.min(mask.w - 1, Math.round(cu + W));
+      const v0 = Math.max(0, Math.round(cv - W)), v1 = Math.min(mask.h - 1, Math.round(cv + W));
+      let best = null;
+      for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) {
+        const i0 = v * mask.w + u;
+        if (!rest[i0] || seen[i0]) continue;
+        // 4 近傍でつながった塊を集める
+        const stack = [i0];
+        seen[i0] = 1;
+        let n = 0, minU = u, maxU = u, minV = v, maxV = v;
+        while (stack.length) {
+          const i = stack.pop(), pu = i % mask.w, pv = (i - pu) / mask.w;
+          n++;
+          if (pu < minU) minU = pu; if (pu > maxU) maxU = pu;
+          if (pv < minV) minV = pv; if (pv > maxV) maxV = pv;
+          for (const j of [i - 1, i + 1, i - mask.w, i + mask.w]) {
+            if (j < 0 || j >= rest.length || seen[j] || !rest[j]) continue;
+            if (Math.abs((j % mask.w) - pu) > 1) continue;
+            seen[j] = 1;
+            stack.push(j);
+          }
+        }
+        const w = (maxU - minU + 1) / SCALE, h = (maxV - minV + 1) / SCALE;
+        if (w < 2.5 || h < 2.5 || w > 7 || h > 7 || Math.abs(w - h) > 1.5) continue;
+        if (n > 0.8 * w * h * SCALE * SCALE) continue;   // 塗りつぶしの塊は丸(輪)ではない
+        const at = toMm((minU + maxU) / 2, (minV + maxV) / 2);
+        const d = Math.hypot(at[0] - mark[0], at[1] - mark[1]);
+        if (!best || d < best.d) best = { mark, at, d };
+      }
+      if (best) found.push(best);
+    }
+    return found;
+  }
+
+  // 丸から外へ順に線を数えて番号を付ける。lines の点は [沿う向き, 横切る向き] mm。
+  // 丸の位置 (along, across) と、丸のマスの値 markValue から、線の並びと間隔で番号を決める(線が欠けていても間隔で飛ばす)
+  function indexFromMarks(lines, values, marks, alongOf, acrossOf) {
+    const votes = lines.map(() => new Map());
+    for (const m of marks) {
+      const along = alongOf(m.at), across = acrossOf(m.at), nominal = acrossOf(m.mark);
+      const pos = [];
+      lines.forEach((tr, index) => {
+        if (!(tr[0][0] - 2 <= along && along <= tr[tr.length - 1][0] + 2)) return;
+        pos.push([interp(along, tr.map(p => p[0]), tr.map(p => p[1])), index]);
+      });
+      for (const side of [-1, 1]) {
+        const list = pos.filter(([p]) => (p - across) * side > 0).sort((a, b) => (a[0] - b[0]) * side);
+        let refPos = across, refVal = nominal;
+        for (const [p, index] of list) {
+          let k = -1, err = Infinity;
+          values.forEach((v, i) => {
+            if ((v - refVal) * side <= 0) return;
+            const e = Math.abs((p - refPos) - (v - refVal));
+            if (e < err) { err = e; k = i; }
+          });
+          if (k < 0 || err > 0.4 * GRID_PITCH()) break;   // 間隔が合わないところで数えるのをやめる
+          votes[index].set(k, (votes[index].get(k) || 0) + 1);
+          refPos = p; refVal = values[k];
+        }
+      }
+    }
+    const result = new Map();
+    votes.forEach((v, index) => {
+      if (!v.size) return;
+      const [k] = [...v].reduce((a, b) => (b[1] > a[1] ? b : a));
+      if (!result.has(k) || lines[index].length > lines[result.get(k)].length) result.set(k, index);
+    });
+    return result;
+  }
+  function GRID_PITCH() { return CONFIG.GRID_PITCH_MM; }
+
   // ================================================================ 3. 交点
   function localLine(points, q, radius) {
     const near = [];
@@ -545,6 +637,21 @@
     const toLines = (index, tracks) => new Map([...index].map(([k, n]) => [k, tracks[n]]));
     const candidates = [["端から数える", toLines(hIndex, hTracks), toLines(vIndex, vTracks)]];
 
+    // 丸(目印)を探す。見つかれば、その番号の付け方を優先する
+    // (全体が 1 本ずれた番号でも当てはめの残りはほとんど変わらないので、残りの大きさでは正しい番号を選べない)
+    const marks = findMarks(mask, hTracks, vTracks, toPx, toMm);
+    log(`丸: ${marks.length} / ${MARKS.length} 個` + (marks.length ? "(" + marks.map(m =>
+      `(${m.mark[0]}, ${m.mark[1]}) のずれ ${(m.at[0] - m.mark[0]).toFixed(1)}, ${(m.at[1] - m.mark[1]).toFixed(1)} mm`).join("、") + ")" : ""));
+    let markCandidate = null;
+    if (marks.length) {
+      const hByMark = indexFromMarks(hInMm, ys, marks, p => p[0], p => p[1]);
+      const vByMark = indexFromMarks(vInMm, xs, marks, p => p[1], p => p[0]);
+      markCandidate = ["丸から数える", toLines(hByMark, hTracks), toLines(vByMark, vTracks)];
+      candidates.unshift(markCandidate);
+    } else {
+      log("  丸が見つからないので、線の端と並び順から番号を決める(番号が 1 本ずれることがある)");
+    }
+
     const midX = (cfg.PAPER_X_MIN + cfg.PAPER_X_MAX) / 2;
     const colsAll = [], rowsAll = [];
     for (let n = 0; n * 0.7 < 40; n++) for (const s of [1, -1]) colsAll.push(Math.trunc(toPx(midX + n * 0.7 * s, 0)[0]));
@@ -575,6 +682,8 @@
       const [r, c] = score(h, v);
       log(`番号の付け方「${name}」: 横線 ${h.size} 本、縦線 ${v.size} 本、交点 ${c.size} 個` +
           (r !== null ? `、当てはめの残り ${r.toFixed(2)} mm` : "(交点が少ない)"));
+      if (r !== null && markCandidate && name === "丸から数える") { best = { rms: r, h, v, cross: c, fixed: true }; continue; }
+      if (best && best.fixed) continue;
       if (r !== null && (best === null || r < best.rms - 0.05 || (Math.abs(r - best.rms) <= 0.05 && c.size > best.cross.size))) {
         best = { rms: r, h, v, cross: c };
       }
@@ -638,8 +747,12 @@
     const biggest = Math.max(...dx.map((v, k) => Math.hypot(v, dy[k])));
     log(`表: ${tx.length} x ${ty.length}、補正量の最大 ${biggest.toFixed(2)} mm`);
 
-    // 確認用の画像(指令した位置 = 青い点、描かれた位置 = 赤い丸)
+    // 確認用の画像(指令した位置 = 青い点、描かれた位置 = 赤い丸、見つけた目印 = 緑の丸)
     const debug = top;
+    for (const m of marks) {
+      const [u, v] = toPx(m.at[0], m.at[1]);
+      cv.circle(debug, new cv.Point(Math.round(u), Math.round(v)), 3 * SCALE, new cv.Scalar(0, 200, 0), 3);
+    }
     for (const k of best.cross.values()) {
       const [u, v] = toPx(xs[k.j], ys[k.i]);
       const p = new cv.Point(Math.round(u), Math.round(v)), q = new cv.Point(Math.round(k.q[0]), Math.round(k.q[1]));
