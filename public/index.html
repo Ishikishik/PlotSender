@@ -11,6 +11,7 @@
   <script defer src="./js/normalize.js"></script>
   <script defer src="./js/vectorize.js"></script>
   <script defer src="./js/photo.js"></script>
+  <script defer src="./js/calibration-ui.js"></script>
   <script defer src="./js/health.js"></script>
 </head>
 <body>
@@ -63,6 +64,26 @@
         <p id="paper-status" role="status" aria-live="polite"></p>
       </div>
       </div>
+
+      <!-- パンタグラフのタブだけに出す -->
+      <section id="calibration" class="calibration" hidden>
+        <h2>補正(パンタグラフ)</h2>
+        <p>使っている補正データ: <span id="cal-current">確認中…</span></p>
+        <ol>
+          <li>機械の &gt;_ タブで「Cal grid」(補正ありで描く)か「Cal grid raw」(補正なしで描く)を選び、補正シートに格子を描く</li>
+          <li>シートの 4 つのマーカーと格子が全部写るように、真上から明るく撮る</li>
+          <li>描いたときの補正を選んで、写真を送る(機械の画面の QR を読み取って開いたときだけ送れます)</li>
+        </ol>
+        <fieldset class="cal-mode">
+          <label><input type="radio" name="cal-mode" value="update" checked> 補正ありで描いた(今の補正データに残りを足す)</label>
+          <label><input type="radio" name="cal-mode" value="new"> 補正なしで描いた(新しく作る)</label>
+        </fieldset>
+        <input id="cal-input" type="file" accept="image/*">
+        <button id="cal-send" type="button" disabled>補正データを作って送る</button>
+        <p id="cal-status" role="status" aria-live="polite"></p>
+        <canvas id="cal-debug" hidden></canvas>
+        <pre id="cal-log"></pre>
+      </section>
     </section>
 
     <section id="connectwifi" hidden>

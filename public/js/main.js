@@ -2,6 +2,7 @@ const buttons = document.querySelectorAll("[data-tab]");
 const workspace = document.querySelector("#workspace");
 const connectwifi = document.querySelector("#connectwifi");
 const modeTitle = document.querySelector("#mode-title");
+const calibration = document.querySelector("#calibration");
 
 // QR から来たときは ?mode=b(パンタグラフ)で開く
 const startTab = new URLSearchParams(location.search).get("mode");
@@ -21,6 +22,7 @@ function switchTab(tab) {
 
   workspace.hidden = isWifi;
   connectwifi.hidden = !isWifi;
+  calibration.hidden = currentTab !== "b";   // 補正の欄はパンタグラフだけ
 
   if (!isWifi) {
     // 見出しはタブのボタンの名前にする

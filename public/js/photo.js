@@ -202,6 +202,7 @@ function useUpQrToken() {
   tokenKind = "serial";
   const mode = new URLSearchParams(location.search).get("mode") || "b";
   history.replaceState(null, "", location.pathname + "?mode=" + mode);
-  espStatus.textContent = "QR のトークンを使いました。もう一度 AI にかけるには、新しい QR を読み取ってください。";
+  espStatus.textContent = "QR のトークンを使いました。もう一度使うには、新しい QR を読み取ってください。";
   updateSendButton();
+  if (typeof updateCalButton === "function") updateCalButton();   // 補正の送信ボタン(calibration-ui.js)
 }

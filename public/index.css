@@ -202,3 +202,58 @@ h1 {
     padding: 20px 16px;
   }
 }
+
+/* パンタグラフの補正の欄 */
+.calibration {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid black;
+}
+
+.calibration h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.cal-mode {
+  margin: 12px 0;
+  border: 1px solid black;
+  border-radius: 4px;
+}
+
+.cal-mode label {
+  display: block;
+}
+
+#cal-input,
+#cal-send {
+  display: block;
+  margin-top: 12px;
+  max-width: 100%;
+  font: inherit;
+}
+
+#cal-send {
+  background: white;
+  color: black;
+  border: 1px solid black;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+#cal-debug {
+  display: block;
+  margin-top: 12px;
+  max-width: 100%;
+  height: auto;
+}
+
+#cal-debug[hidden] {
+  display: none;
+}
+
+#cal-log {
+  margin-top: 12px;
+  white-space: pre-wrap;
+  font-size: 12px;
+}

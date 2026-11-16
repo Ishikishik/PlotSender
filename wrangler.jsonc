@@ -8,8 +8,8 @@
     "directory": "./public",
     "run_worker_first": ["/api/*", "/T/*", "/t/*"]
   },
-  // QR のトークンの使用済み記録(15分で自動で消える)
+  // KV: QR のトークンの使用済み記録(qr:...、15分で自動で消える)と、最新の補正データ(correction:...)
   "kv_namespaces": [
-    { "binding": "USED_QR_TOKENS", "id": "4477824cf6c04caeb8d6260d6da29095" }
+    { "binding": "KV", "id": "4477824cf6c04caeb8d6260d6da29095" }
   ]
 }

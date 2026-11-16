@@ -3,11 +3,14 @@
 /api/health … サーバーの時刻を返す（動作確認用）
 /api/ai     … 画像と TOTP トークンを受け取り、トークンが正しければ AI で線画にした画像を返す
 /T/<6桁>    … パンタグラフの画面の QR から来る。トークンを付けてパンタグラフのタブへ移動させる
+/api/correction … パンタグラフの補正データ。GET で最新を返す(ESP32 とページが読む)、
+                  POST でページが作った表を受け取って保存する(QR のトークンを 1 回使う)
 """
 
 import json
+import math
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 from workers import Response, WorkerEntrypoint
@@ -29,6 +32,34 @@ def error(message: str, status: int, **headers) -> Response:
     return Response.json({"error": message}, status=status, headers=headers or None)
 
 
+CORRECTION_KEY = "correction:latest"
+
+
+def check_table(t: dict) -> dict:
+    """ページから届いた補正データを確かめて、必要な項目だけの dict にする。おかしければ ValueError"""
+    def number(v, limit=1000.0):
+        v = float(v)
+        if not math.isfinite(v) or abs(v) > limit:
+            raise ValueError(f"値が範囲外: {v}")
+        return v
+    nx, ny = int(t["nx"]), int(t["ny"])
+    if not (2 <= nx <= 100 and 2 <= ny <= 100):
+        raise ValueError("表の大きさ")
+    dx, dy = [number(v, 100) for v in t["dx"]], [number(v, 100) for v in t["dy"]]
+    if len(dx) != nx * ny or len(dy) != nx * ny:
+        raise ValueError("表の数")
+    d = t["dir"]
+    xy, yx = [number(v, 10) for v in d["xy"]], [number(v, 10) for v in d["yx"]]
+    if len(xy) != 3 or len(yx) != 3:
+        raise ValueError("向きの係数の数")
+    return {
+        "nx": nx, "ny": ny, "x0": number(t["x0"]), "y0": number(t["y0"]), "step": number(t["step"]),
+        "dx": dx, "dy": dy,
+        "dir": {"cx": number(d["cx"]), "sx": number(d["sx"]), "cy": number(d["cy"]), "sy": number(d["sy"]), "xy": xy, "yx": yx},
+        "mode": str(t.get("mode", ""))[:20],
+    }
+
+
 class Default(WorkerEntrypoint):
     async def fetch(self, request):
         # HTTPリクエストが届くたびに呼ばれる。クエリ文字列を除いたパスで振り分ける。
@@ -37,6 +68,8 @@ class Default(WorkerEntrypoint):
             return await self.health(request)
         if path == "/api/ai":
             return await self.ai(request)
+        if path == "/api/correction":
+            return await self.correction(request)
         if path[:3] in ("/T/", "/t/"):
             return self.qr_redirect(path[3:])
         return error("Not found", 404)
@@ -70,9 +103,9 @@ class Default(WorkerEntrypoint):
                 return True, None
             return False, "トークンが正しくありません"
 
-        used = getattr(self.env, "USED_QR_TOKENS", None)
+        used = getattr(self.env, "KV", None)
         if used is None:
-            return False, "サーバーに USED_QR_TOKENS(KV)が設定されていません"
+            return False, "サーバーに KV が設定されていません"
         mode, step = self.find_qr_machine(token)
         if mode is None:
             return False, "QR のトークンが正しくないか、15分の期限が切れています"
@@ -83,6 +116,34 @@ class Default(WorkerEntrypoint):
         # 期限が切れたあとは番号が照合に出てこないので、記録も 15 分ほどで消してよい。
         await used.put(used_key, "1", expirationTtl=QR_VALID_SEC + 60)
         return True, used_key
+
+    async def correction(self, request):
+        """GET: 最新の補正データ(なければ 404)。POST: {token, table} を受け取って最新として保存する。"""
+        if request.method == "GET":
+            store = getattr(self.env, "KV", None)
+            text = await store.get(CORRECTION_KEY) if store is not None else None
+            if text is None:
+                return error("補正データはまだありません", 404, **{"Cache-Control": "no-store"})
+            return Response(text, headers={"Content-Type": "application/json", "Cache-Control": "no-store"})
+        if request.method != "POST":
+            return error("Method not allowed", 405, Allow="GET, POST")
+
+        try:
+            body = json.loads(await request.text())
+            table = check_table(body["table"])
+        except (ValueError, KeyError, TypeError) as e:
+            return error(f"補正データの形が正しくありません({e})", 400)
+        ok, detail = await self.check_token(str(body.get("token", "")), "qr")
+        if not ok:
+            return error(detail, 401)
+        # いつの補正データかを付けて保存する(ESP32 の Setting タブに出る)。1 つ前のものも残しておく
+        table["version"] = datetime.now(timezone(timedelta(hours=9))).strftime("%Y-%m-%d %H:%M")
+        text = json.dumps(table, separators=(",", ":"))
+        previous = await self.env.KV.get(CORRECTION_KEY)
+        if previous is not None:
+            await self.env.KV.put(CORRECTION_KEY + ":previous", previous)
+        await self.env.KV.put(CORRECTION_KEY, text)
+        return Response.json({"ok": True, "version": table["version"]}, headers={"Cache-Control": "no-store"})
 
     async def health(self, request):
         # 呼び出した時点のUTC時刻を返す。キャッシュせず毎回計算する。
@@ -129,7 +190,7 @@ class Default(WorkerEntrypoint):
         finally:
             # AI が失敗したら、QR のトークンをもう一度使えるように戻す(使い切りは成功した 1 回だけ)
             if detail and not succeeded:
-                await self.env.USED_QR_TOKENS.delete(detail)
+                await self.env.KV.delete(detail)
 
     async def run_ai(self, image):
         """AI で線画にする。(返すレスポンス, 成功したか) を返す。"""
