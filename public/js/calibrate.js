@@ -35,7 +35,7 @@
 
   // 格子のマスの真ん中に描く丸 [mm](firm/src/jobs/PlotTest.h の GRID_MARKS と同じ値)。線の番号を決める目印
   const MARKS = [[-45, 90], [15, 130], [55, 100]];
-  const MARK_SEARCH_MM = 15;   // 丸を探す範囲(指令した位置からこれ以上ずれていると見つからない)
+  const MARK_SEARCH_MM = 20;   // 丸を探す範囲(指令した位置からこれ以上ずれていると見つからない)
 
   const SCALE = 10;            // 真上から見た画像の 1mm あたりのピクセル数
   const POLY_DEGREE = 4;       // 往復のずれを見積もるときの多項式の次数
@@ -331,7 +331,7 @@
   // 線をたどった跡を消したマスクから、指令した位置の近くにある小さな丸を探す。返り値: [{mark, at: [x, y] mm}]
   function findMarks(mask, hTracks, vTracks, toPx, toMm) {
     const rest = new Uint8Array(mask.d);
-    const R = Math.round(1.2 * SCALE), A = Math.ceil(TRACK_STEP_MM * SCALE / 2) + 1;
+    const R = Math.round(1.0 * SCALE), A = Math.ceil(TRACK_STEP_MM * SCALE / 2) + 1;
     const clear = (u0, u1, v0, v1) => {
       for (let v = Math.max(0, v0); v <= Math.min(mask.h - 1, v1); v++)
         for (let u = Math.max(0, u0); u <= Math.min(mask.w - 1, u1); u++) rest[v * mask.w + u] = 0;
@@ -339,18 +339,20 @@
     for (const tr of hTracks) for (const [t, c] of tr) clear(Math.round(t - A), Math.round(t + A), Math.round(c - R), Math.round(c + R));
     for (const tr of vTracks) for (const [t, c] of tr) clear(Math.round(c - R), Math.round(c + R), Math.round(t - A), Math.round(t + A));
 
-    const found = [];
+    // 見つけた塊のうち、丸(中が空いた輪)らしいものを集める
+    // 実際に描かれた丸は、ガタで横長の楕円になったり、切れ目のある C の形になったりする(4 x 2.7mm ほど)。
+    // そのため、少し離れた点(GAP 以内)も同じ塊とし、大きさと縦横の比はゆるく見る
+    const GAP = Math.round(0.6 * SCALE);
     const seen = new Uint8Array(rest.length);
+    const blobs = [];
     for (const mark of MARKS) {
       const [cu, cv] = toPx(mark[0], mark[1]);
       const W = MARK_SEARCH_MM * SCALE;
       const u0 = Math.max(0, Math.round(cu - W)), u1 = Math.min(mask.w - 1, Math.round(cu + W));
       const v0 = Math.max(0, Math.round(cv - W)), v1 = Math.min(mask.h - 1, Math.round(cv + W));
-      let best = null;
       for (let v = v0; v <= v1; v++) for (let u = u0; u <= u1; u++) {
         const i0 = v * mask.w + u;
         if (!rest[i0] || seen[i0]) continue;
-        // 4 近傍でつながった塊を集める
         const stack = [i0];
         seen[i0] = 1;
         let n = 0, minU = u, maxU = u, minV = v, maxV = v;
@@ -359,21 +361,38 @@
           n++;
           if (pu < minU) minU = pu; if (pu > maxU) maxU = pu;
           if (pv < minV) minV = pv; if (pv > maxV) maxV = pv;
-          for (const j of [i - 1, i + 1, i - mask.w, i + mask.w]) {
-            if (j < 0 || j >= rest.length || seen[j] || !rest[j]) continue;
-            if (Math.abs((j % mask.w) - pu) > 1) continue;
+          for (let dv = -GAP; dv <= GAP; dv++) for (let du = -GAP; du <= GAP; du++) {
+            const qu = pu + du, qv = pv + dv;
+            if (qu < 0 || qv < 0 || qu >= mask.w || qv >= mask.h) continue;
+            const j = qv * mask.w + qu;
+            if (seen[j] || !rest[j]) continue;
             seen[j] = 1;
             stack.push(j);
           }
         }
         const w = (maxU - minU + 1) / SCALE, h = (maxV - minV + 1) / SCALE;
-        if (w < 2.5 || h < 2.5 || w > 7 || h > 7 || Math.abs(w - h) > 1.5) continue;
-        if (n > 0.8 * w * h * SCALE * SCALE) continue;   // 塗りつぶしの塊は丸(輪)ではない
-        const at = toMm((minU + maxU) / 2, (minV + maxV) / 2);
-        const d = Math.hypot(at[0] - mark[0], at[1] - mark[1]);
-        if (!best || d < best.d) best = { mark, at, d };
+        if (Math.min(w, h) < 1.5 || Math.max(w, h) > 8 || Math.max(w, h) / Math.min(w, h) > 2.5) continue;
+        // 輪なら真ん中が空いている(線の切れ端や点の塊を外す)
+        const mu = Math.round((minU + maxU) / 2), mv = Math.round((minV + maxV) / 2);
+        const hu = Math.max(1, Math.round(w * SCALE * 0.15)), hv = Math.max(1, Math.round(h * SCALE * 0.15));
+        let inside = 0;
+        for (let v2 = mv - hv; v2 <= mv + hv; v2++) for (let u2 = mu - hu; u2 <= mu + hu; u2++) inside += mask.d[v2 * mask.w + u2] ? 1 : 0;
+        if (inside > 0.2 * (2 * hu + 1) * (2 * hv + 1)) continue;
+        blobs.push({ at: toMm((minU + maxU) / 2, (minV + maxV) / 2), size: [w, h] });
       }
-      if (best) found.push(best);
+    }
+    // 近い組から順に、丸と塊を 1 対 1 で結ぶ
+    const pairs = [];
+    MARKS.forEach((mark, m) => blobs.forEach((b, k) => {
+      const d = Math.hypot(b.at[0] - mark[0], b.at[1] - mark[1]);
+      if (d <= MARK_SEARCH_MM) pairs.push({ m, k, d });
+    }));
+    pairs.sort((a, b) => a.d - b.d);
+    const usedM = new Set(), usedK = new Set(), found = [];
+    for (const p of pairs) {
+      if (usedM.has(p.m) || usedK.has(p.k)) continue;
+      usedM.add(p.m); usedK.add(p.k);
+      found.push({ mark: MARKS[p.m], at: blobs[p.k].at, size: blobs[p.k].size, d: p.d });
     }
     return found;
   }
