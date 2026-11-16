@@ -23,7 +23,8 @@ function switchTab(tab) {
   connectwifi.hidden = !isWifi;
 
   if (!isWifi) {
-    modeTitle.textContent = currentTab;
+    // 見出しはタブのボタンの名前にする
+    modeTitle.textContent = [...buttons].find((b) => b.dataset.tab === currentTab).textContent;
     workspace.dataset.mode = currentTab;
   }
 }
