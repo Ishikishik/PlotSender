@@ -5,6 +5,8 @@
 2. 「Prefer: wait」で完成まで待つ。それでも終わっていなければ、終わるまで数秒おきに確認する
 3. 出力された画像の URL から画像をダウンロードして返す
 
+かかった時間を段階ごとに測って返す(main.py がレスポンスのヘッダーに入れ、ページに表示する)。
+
 API キーは Cloudflare のシークレット REPLICATE_API_TOKEN（ローカルは .dev.vars）に置く。
 """
 
@@ -12,6 +14,7 @@ import asyncio
 import base64
 import json
 import time
+from datetime import datetime
 
 from workers import fetch
 
@@ -28,13 +31,38 @@ PROMPT = (
 POLL_INTERVAL = 1.5  # 完成を確認する間隔（秒）
 TIMEOUT = 90         # これ以上かかったら諦める（秒）
 
+# 速さと仕上がりの調整用。None ならモデルの初期値(steps 30、size 1024)を使う
+NUM_INFERENCE_STEPS = None   # 例: 20(少ないほど速い)
+IMAGE_SIZE = None            # 例: 768(出力の長辺。小さいほど速い)
+SPEED_MODE = None            # 例: "Extra Juiced 🔥 (more speed)"(モデルの選択肢と同じ文字列)
+
 
 class AIError(Exception):
     """AI の処理に失敗したときに投げる。メッセージはそのまま利用者に見せる。"""
 
 
-async def process_image(data: bytes, content_type: str, api_token: str) -> tuple[bytes, str]:
-    """画像を線画に変換して (画像データ, Content-Type) を返す。"""
+def _ms(start: float) -> int:
+    return round((time.time() - start) * 1000)
+
+
+def _parse_time(text) -> float | None:
+    try:
+        return datetime.fromisoformat(str(text).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+async def process_image(data: bytes, content_type: str, api_token: str) -> tuple[bytes, str, dict]:
+    """画像を線画に変換して (画像データ, Content-Type, かかった時間 [ms]) を返す。
+
+    かかった時間:
+      create   … 予測を作る POST(Prefer: wait で完成まで待つことが多い)
+      poll     … まだ終わっていなかったときに確認を繰り返した時間
+      download … 出力画像のダウンロード
+      queue    … Replicate の中で計算が始まるまでの待ち(起動待ちを含む)
+      predict  … Replicate の中で AI が計算していた時間
+    """
+    timings = {}
     headers = {
         "Authorization": f"Bearer {api_token}",
         "Content-Type": "application/json",
@@ -47,8 +75,15 @@ async def process_image(data: bytes, content_type: str, api_token: str) -> tuple
             "output_format": "png",      # 線画なので JPEG のにじみが出ない PNG にする
         }
     }
+    if NUM_INFERENCE_STEPS is not None:
+        body["input"]["num_inference_steps"] = NUM_INFERENCE_STEPS
+    if IMAGE_SIZE is not None:
+        body["input"]["image_size"] = IMAGE_SIZE
+    if SPEED_MODE is not None:
+        body["input"]["speed_mode"] = SPEED_MODE
 
     # 1. 予測を作る。Prefer: wait で、終わるまで（最大60秒）その場で待ってもらう。
+    t = time.time()
     resp = await fetch(
         MODEL_URL,
         method="POST",
@@ -56,19 +91,30 @@ async def process_image(data: bytes, content_type: str, api_token: str) -> tuple
         body=json.dumps(body),
     )
     prediction = await _read_json(resp)
+    timings["create"] = _ms(t)
     if resp.status == 401:
         raise AIError("Replicate の API キーが正しくありません")
     if resp.status >= 400:
         raise AIError(f"Replicate がエラーを返しました（HTTP {resp.status}）: {_detail(prediction)}")
 
     # 2. まだ終わっていなければ、終わるまで確認を繰り返す。
-    deadline = time.time() + TIMEOUT
+    t = time.time()
+    deadline = t + TIMEOUT
     while prediction.get("status") in ("starting", "processing"):
         if time.time() > deadline:
             raise AIError("AI の処理が時間内に終わりませんでした")
         await asyncio.sleep(POLL_INTERVAL)
         resp = await fetch(prediction["urls"]["get"], headers=headers)
         prediction = await _read_json(resp)
+    timings["poll"] = _ms(t)
+
+    # Replicate の中での時間(計算の時間と、始まるまでの待ち)
+    metrics = prediction.get("metrics") or {}
+    if isinstance(metrics.get("predict_time"), (int, float)):
+        timings["predict"] = round(metrics["predict_time"] * 1000)
+    created, started = _parse_time(prediction.get("created_at")), _parse_time(prediction.get("started_at"))
+    if created and started:
+        timings["queue"] = round((started - created) * 1000)
 
     if prediction.get("status") != "succeeded":
         raise AIError(f"AI の処理に失敗しました: {prediction.get('error') or prediction.get('status')}")
@@ -80,11 +126,15 @@ async def process_image(data: bytes, content_type: str, api_token: str) -> tuple
     if not isinstance(output, str):
         raise AIError("AI から画像が返ってきませんでした")
 
+    t = time.time()
     img = await fetch(output)
     if img.status >= 400:
         raise AIError(f"出力画像をダウンロードできませんでした（HTTP {img.status}）")
     out_type = img.headers.get("Content-Type") or "image/png"
-    return await img.bytes(), out_type
+    out = await img.bytes()
+    timings["download"] = _ms(t)
+    print("ai timings [ms]:", timings)   # wrangler tail やダッシュボードのログで見られる
+    return out, out_type, timings
 
 
 async def _read_json(resp) -> dict:

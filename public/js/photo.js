@@ -109,6 +109,7 @@ async function sendPhotoToAI() {
     formData.append("token_kind", tokenKind);
     aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）" +
       (upload === file ? "" : `［送信 ${formatMb(file.size)} → ${formatMb(upload.size)}］`);
+    const sentAt = performance.now();
     const response = await fetch("/api/ai", {
       method: "POST",
       body: formData,
@@ -128,10 +129,11 @@ async function sendPhotoToAI() {
     // 返ってきた画像を「AI処理の結果」に表示する。
     if (aiPreviewUrl) URL.revokeObjectURL(aiPreviewUrl);
     const aiBlob = await response.blob();
+    const timingText = describeTimings(performance.now() - sentAt, response.headers.get("X-AI-Timings"));
     aiPreviewUrl = URL.createObjectURL(aiBlob);
     aiPreview.src = aiPreviewUrl;
     aiPreview.hidden = false;
-    aiStatus.textContent = "AI処理の結果を表示しました。";
+    aiStatus.textContent = "AI処理の結果を表示しました。" + timingText;
     if (tokenKind === "qr") useUpQrToken();
     vectorizeImage(aiBlob);   // 続けてプロッタ用データを作る（vectorize.js）
   } catch (error) {
@@ -143,6 +145,20 @@ async function sendPhotoToAI() {
     imageInput.disabled = false;
     updateSendButton();
   }
+}
+
+// かかった時間の内訳を文にする。totalMs はブラウザで測った全体、header はサーバーの X-AI-Timings(JSON)
+function describeTimings(totalMs, header) {
+  const sec = (ms) => (ms / 1000).toFixed(1) + " 秒";
+  let t = {};
+  try { t = JSON.parse(header || "{}"); } catch { /* 古いサーバーなど */ }
+  console.log("AI timings [ms]", { total: Math.round(totalMs), ...t });
+  const parts = [];
+  if (t.queue != null) parts.push(`AI の起動・順番待ち ${sec(t.queue)}`);
+  if (t.predict != null) parts.push(`AI の計算 ${sec(t.predict)}`);
+  if (t.download != null) parts.push(`画像の取得 ${sec(t.download)}`);
+  if (t.server != null) parts.push(`サーバー全体 ${sec(t.server)}`);
+  return `（全体 ${sec(totalMs)}${parts.length ? "：" + parts.join("・") : ""}）`;
 }
 
 sendToAiButton.addEventListener("click", sendPhotoToAI);

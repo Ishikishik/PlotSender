@@ -5,6 +5,8 @@
 /T/<6桁>    … パンタグラフの画面の QR から来る。トークンを付けてパンタグラフのタブへ移動させる
 """
 
+import json
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
@@ -101,7 +103,9 @@ class Default(WorkerEntrypoint):
             return error("画像ファイルではありません", 415)
 
         # 画像を読む前にトークンを確認する(QR のトークンはここで使用済みになる)。
+        t = time.time()
         ok, detail = await self.check_token(token, kind)
+        self.auth_ms = round((time.time() - t) * 1000)
         if not ok:
             return error(detail, 401)
         succeeded = False
@@ -119,10 +123,22 @@ class Default(WorkerEntrypoint):
         if not api_token:
             return error("サーバーに REPLICATE_API_TOKEN が設定されていません", 500), False
 
+        t = time.time()
         try:
-            data, content_type = await process_image(
+            data, content_type, timings = await process_image(
                 await image.bytes(), image.content_type, api_token
             )
         except AIError as e:
             return error(str(e), 502), False
-        return Response(data, headers={"Content-Type": content_type, "Cache-Control": "no-store"}), True
+        timings = {"auth": getattr(self, "auth_ms", 0), **timings, "server": round((time.time() - t) * 1000)}
+        # かかった時間をヘッダーで返す(ページに表示する。ブラウザの開発者ツールの Server-Timing でも見られる)
+        server_timing = ", ".join(f"{k};dur={v}" for k, v in timings.items())
+        return Response(
+            data,
+            headers={
+                "Content-Type": content_type,
+                "Cache-Control": "no-store",
+                "Server-Timing": server_timing,
+                "X-AI-Timings": json.dumps(timings),
+            },
+        ), True
