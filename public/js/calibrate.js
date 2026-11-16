@@ -14,7 +14,9 @@
   // ---- 機械の設定(firm/src/config/PlotterConfig.h と同じ値) ----
   const CONFIG = { PAPER_X_MIN: -70, PAPER_X_MAX: 70, PAPER_Y_MIN: 75, PAPER_Y_MAX: 150, GRID_PITCH_MM: 10 };
 
-  // ---- 補正シート(calibration/calibration_sheet.json と同じ。マーカーの角の位置 [mm]) ----
+  // ---- マーカーの角の位置 [mm](左上・右上・右下・左下)とはがきの範囲 ----
+  // 0〜3: 印刷した補正シートのマーカー(calibration/calibration_sheet.json)
+  // 10〜14: 天板に埋め込んだマーカー(calibration/plate_markers.json)。写っているものを全部使う
   const SHEET = {
     paper: { x_min: -70, x_max: 70, y_min: 75, y_max: 150 },
     sheet: { x_min: -75, x_max: 75, y_min: 60, y_max: 160 },
@@ -23,6 +25,11 @@
       1: [[66, 159], [74, 159], [74, 151], [66, 151]],
       2: [[66, 69], [74, 69], [74, 61], [66, 61]],
       3: [[-74, 69], [-66, 69], [-66, 61], [-74, 61]],
+      10: [[-69.5, 56.0], [-57.5, 56.0], [-57.5, 44.0], [-69.5, 44.0]],
+      11: [[57.5, 56.0], [69.5, 56.0], [69.5, 44.0], [57.5, 44.0]],
+      12: [[-85.45, 140.2], [-77.05, 140.2], [-77.05, 131.8], [-85.45, 131.8]],
+      13: [[77.05, 140.2], [85.45, 140.2], [85.45, 131.8], [77.05, 131.8]],
+      14: [[-85.45, 94.2], [-77.05, 94.2], [-77.05, 85.8], [-85.45, 85.8]],
     },
   };
 
@@ -137,7 +144,7 @@
         const c = corners.get(k).data32F;
         for (let p = 0; p < 4; p++) { src.push([c[2 * p], c[2 * p + 1]]); dst.push(SHEET.markers[id][p]); }
       }
-      if (found.length < 2) throw new Error(`使えるマーカーが ${found.length} 個しかない(4 個写るように撮る)`);
+      if (found.length < 2) throw new Error(`使えるマーカーが ${found.length} 個しかない(天板のマーカーが全部写るように撮る)`);
       const srcMat = cv.matFromArray(src.length, 1, cv.CV_64FC2, src.flat());
       const dstMat = cv.matFromArray(dst.length, 1, cv.CV_64FC2, dst.flat());
       const hMat = cv.findHomography(srcMat, dstMat);
