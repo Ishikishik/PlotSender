@@ -36,6 +36,10 @@
   const SCALE = 10;            // 真上から見た画像の 1mm あたりのピクセル数
   const POLY_DEGREE = 4;       // 往復のずれを見積もるときの多項式の次数
   const LOCAL_SIGMA_MM = 8;    // 表の各点の当てはめで、近くの交点に付ける重みの幅
+  // 測った交点から離れた表の点(外挿)の扱い。近い交点までの距離が NEAR_MM までは普通に当てはめ、
+  // FAR_MM までに「傾きを使わない(近くの交点の重み付き平均)」に移す。更新のときは、足す量も 0 へ弱める
+  // (外挿した値を更新のたびに足していくと、測っていない場所の値がどんどん大きくなるため)
+  const NEAR_MM = 6, FAR_MM = 20;
   const TABLE_STEP_MM = 5;     // 表の間隔
   const TRACK_STEP_MM = 0.5;   // 線をたどる間隔
   const TRACK_WINDOW_MM = 1.5; // 次の点を探す範囲
@@ -421,7 +425,7 @@
     return result;
   }
 
-  function fitLocal(points, errors, parityI, parityJ, center, span, nodes, log) {
+  function fitLocal(points, errors, parityI, parityJ, center, span, nodes, log, update = false) {
     const B = points.map(p => basis(p[0], p[1], center[0], center[1], span[0], span[1]));
     let cleaned = errors.map(e => e.slice());
     for (const [k, parity] of [[0, parityJ], [1, parityI]]) {
@@ -430,7 +434,7 @@
       cleaned.forEach((e, n) => { e[k] -= p * parity[n]; });
       log(`  ${k === 0 ? "dx" : "dy"}: 往復のずれ ±${Math.abs(p).toFixed(2)} mm(取り除く)`);
     }
-    function local(at, skip = -1) {
+    function local(at, skip = -1, slope = true) {
       const d = points.map(p => [p[0] - at[0], p[1] - at[1]]);
       let w = d.map(([a, b]) => Math.exp(-(a * a + b * b) / (2 * LOCAL_SIGMA_MM ** 2)));
       if (skip >= 0) w[skip] = 0;
@@ -439,8 +443,19 @@
         if (skip >= 0) w[skip] = 0;
       }
       const sw = w.map(Math.sqrt);
-      const c = lstsq(d.map(([a, b], n) => [sw[n], a * sw[n], b * sw[n]]), cleaned.map((e, n) => [e[0] * sw[n], e[1] * sw[n]]));
+      const c = lstsq(d.map(([a, b], n) => slope ? [sw[n], a * sw[n], b * sw[n]] : [sw[n]]),
+                      cleaned.map((e, n) => [e[0] * sw[n], e[1] * sw[n]]));
       return c[0];
+    }
+    // 測った交点から離れた表の点は、傾きで伸ばさない(更新のときは足す量も弱める)
+    function atNode(n) {
+      const near = Math.min(...points.map(p => Math.hypot(p[0] - n[0], p[1] - n[1])));
+      const t = Math.min(Math.max((near - NEAR_MM) / (FAR_MM - NEAR_MM), 0), 1);
+      const f = 1 - t * t * (3 - 2 * t);                  // 近い: 1 → 遠い: 0(なめらかに)
+      if (f >= 1) return local(n);
+      const lin = local(n), flat = local(n, -1, false);
+      const v = [f * lin[0] + (1 - f) * flat[0], f * lin[1] + (1 - f) * flat[1]];
+      return update ? [v[0] * f, v[1] * f] : v;
     }
     for (let round = 0; round < 2; round++) {
       const norm = points.map((q, k) => { const p = local(q, k); return Math.hypot(cleaned[k][0] - p[0], cleaned[k][1] - p[1]); });
@@ -451,7 +466,9 @@
       points = points.filter((_, k) => !bad[k]);
       cleaned = cleaned.filter((_, k) => !bad[k]);
     }
-    const values = nodes.map(n => local(n));
+    const values = nodes.map(atNode);
+    const far = nodes.filter(n => Math.min(...points.map(p => Math.hypot(p[0] - n[0], p[1] - n[1]))) > NEAR_MM).length;
+    if (far) log(`  表の ${far} 点は測った交点から ${NEAR_MM}mm 以上離れている(外挿を弱めた${update ? "。足す量も弱めた" : ""})`);
     const residual = points.map((q, k) => { const f = local(q); return [cleaned[k][0] - f[0], cleaned[k][1] - f[1]]; });
     log(`  当てはめの残り(線の波など) dx ${rms(residual.map(r => r[0])).toFixed(2)} mm、dy ${rms(residual.map(r => r[1])).toFixed(2)} mm(RMS)`);
     return values;
@@ -605,7 +622,7 @@
       dirXY = dirXY.map((v, k) => v + cur.dir.xy[k]);
       dirYX = dirYX.map((v, k) => v + cur.dir.yx[k]);
       log(`今の表(${cur.version || "?"})に残りのずれを足す:`);
-      values = fitLocal(nominal, correction, parityI, parityJ, center, span, nodes, log);
+      values = fitLocal(nominal, correction, parityI, parityJ, center, span, nodes, log, true);
     } else {
       oldDx = tx.map(() => ty.map(() => 0));
       oldDy = tx.map(() => ty.map(() => 0));
