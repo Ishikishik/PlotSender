@@ -185,8 +185,11 @@ connectEspButton.addEventListener("click", async () => {
 
 // パンタグラフの画面の QR から来たとき(/T/123456 → /?mode=b&token=123456)は、そのトークンを使う。
 // QR のトークンは 15 分以内に AI 生成 1 回だけ使える(使い切り)。
+// サーバーが鍵からどの機械の QR かを判断して、そのタブ(?mode=)で開く。どの鍵にも合わなければ ?qr=invalid
 const qrToken = new URLSearchParams(location.search).get("token");
-if (qrToken && /^\d{6}$/.test(qrToken)) {
+if (new URLSearchParams(location.search).get("qr") === "invalid") {
+  espStatus.textContent = "QR が正しくないか、15分の期限が切れています。新しい QR を読み取ってください。";
+} else if (qrToken && /^\d{6}$/.test(qrToken)) {
   latestToken = qrToken;
   tokenKind = "qr";
   espStatus.textContent = "QR のトークンを使います（15分以内に AI 生成 1 回）";
@@ -197,7 +200,8 @@ if (qrToken && /^\d{6}$/.test(qrToken)) {
 function useUpQrToken() {
   latestToken = null;
   tokenKind = "serial";
-  history.replaceState(null, "", location.pathname + "?mode=b");
+  const mode = new URLSearchParams(location.search).get("mode") || "b";
+  history.replaceState(null, "", location.pathname + "?mode=" + mode);
   espStatus.textContent = "QR のトークンを使いました。もう一度 AI にかけるには、新しい QR を読み取ってください。";
   updateSendButton();
 }

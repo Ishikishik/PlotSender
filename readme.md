@@ -15,4 +15,4 @@ cloudflareで設定する鍵とか
 - AIのapiキー(REPLICATE_API_TOKEN)
 - KV(USED_QR_TOKENS)… 使い終わった QR のトークンの記録。wrangler.jsonc の kv_namespaces に id を入れる
 
-QR の URL は `HTTPS://PLOTSENDER.OTTERSTB.COM/T/<6桁>`。サーバーが `/?mode=b&token=<6桁>`(パンタグラフのタブ)へ移動させる
+QR の URL は `HTTPS://PLOTSENDER.OTTERSTB.COM/T/<6桁>`。サーバーがトークンの鍵から機械を判断して、そのタブ(`/?mode=b&token=<6桁>` など)へ移動させる。機械と鍵の対応は server/main.py の QR_MACHINES(描馬灯は `TOTP_KEY_QR_BYOMATO` を登録すれば使える)

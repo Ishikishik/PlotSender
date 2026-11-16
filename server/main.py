@@ -17,6 +17,13 @@ from auth import QR_VALID_SEC, match_qr_step, verify_totp
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 受け付ける画像は10MBまで
 
+# QR の鍵と、その QR を出す機械(ページのタブ)。どの鍵のトークンかで、開くタブを決める。
+# 鍵が登録されていない機械は飛ばす(描馬灯は準備中なので、鍵を登録したら使えるようになる)
+QR_MACHINES = [
+    ("b", "TOTP_KEY_QR"),          # パンタグラフ(cutting_machine)
+    ("a", "TOTP_KEY_QR_BYOMATO"),  # 描馬灯
+]
+
 
 def error(message: str, status: int, **headers) -> Response:
     return Response.json({"error": message}, status=status, headers=headers or None)
@@ -34,15 +41,23 @@ class Default(WorkerEntrypoint):
             return self.qr_redirect(path[3:])
         return error("Not found", 404)
 
+    def find_qr_machine(self, token):
+        """QR のトークンがどの機械の鍵のものかを調べる → (タブ, 番号)。どれでもなければ (None, None)"""
+        for mode, key_name in QR_MACHINES:
+            key_hex = getattr(self.env, key_name, None)
+            if not key_hex:
+                continue
+            step = match_qr_step(token, key_hex)
+            if step is not None:
+                return mode, step
+        return None, None
+
     def qr_redirect(self, token):
-        # QR の URL は短くするため大文字のパスにしてある。トークンをクエリにしてトップページへ送る。
-        if not (len(token) == 6 and token.isdigit()):
-            return error("Not found", 404)
-        return Response(
-            "",
-            status=302,
-            headers={"Location": f"/?mode=b&token={token}", "Cache-Control": "no-store"},
-        )
+        # QR の URL は短くするため大文字のパスにしてある。
+        # トークンの鍵から機械を決めて、そのタブを開く(ここではまだ使用済みにしない)。
+        mode, _ = self.find_qr_machine(token)
+        location = f"/?mode={mode}&token={token}" if mode else "/?qr=invalid"
+        return Response("", status=302, headers={"Location": location, "Cache-Control": "no-store"})
 
     async def check_token(self, token, kind):
         """トークンを確認する。正しければ (True, QR の使用済み記録のキー or None)、違えば (False, 理由)。
@@ -55,14 +70,13 @@ class Default(WorkerEntrypoint):
                 return True, None
             return False, "トークンが正しくありません"
 
-        key_hex = getattr(self.env, "TOTP_KEY_QR", None)
         used = getattr(self.env, "USED_QR_TOKENS", None)
-        if not key_hex or used is None:
-            return False, "サーバーに TOTP_KEY_QR か USED_QR_TOKENS(KV)が設定されていません"
-        step = match_qr_step(token, key_hex)
-        if step is None:
+        if used is None:
+            return False, "サーバーに USED_QR_TOKENS(KV)が設定されていません"
+        mode, step = self.find_qr_machine(token)
+        if mode is None:
             return False, "QR のトークンが正しくないか、15分の期限が切れています"
-        used_key = f"qr:{step}"
+        used_key = f"qr:{mode}:{step}"
         if await used.get(used_key) is not None:
             return False, "この QR はもう使われています。新しい QR を読み取ってください"
         # 先に使用済みにしてから AI を呼ぶ(同時に 2 回送られても 1 回だけにする)。

@@ -5,8 +5,9 @@
 const plotPreview = document.querySelector("#plot-preview");
 const plotStatus = document.querySelector("#plot-status");
 const downloadPlotButton = document.querySelector("#download-plot");
-// 紙の設定は固定(はがき 150 × 105 mm)。この長さより短い線は描かない
-const PAPER_OPTIONS = { paperWidth: 150, paperHeight: 105, minStrokeMm: 0.4 };
+// 紙の設定は固定。cutting_machine(パンタグラフ)の描ける範囲 140 × 75 mm に合わせる
+// (firm/src/config/PlotterConfig.h の PAPER_X_MIN〜MAX、PAPER_Y_MIN〜MAX)。この長さより短い線は描かない
+const PAPER_OPTIONS = { paperWidth: 140, paperHeight: 75, minStrokeMm: 0.4 };
 const paperStatus = document.querySelector("#paper-status");
 
 const VECTORIZE_MAX_SIZE = 1024;   // これより大きい画像は縮小してから処理する
