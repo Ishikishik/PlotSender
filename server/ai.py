@@ -32,8 +32,8 @@ POLL_INTERVAL = 1.5  # 完成を確認する間隔（秒）
 TIMEOUT = 90         # これ以上かかったら諦める（秒）
 
 # 速さと仕上がりの調整用。None ならモデルの初期値(steps 30、size 1024)を使う
-NUM_INFERENCE_STEPS = None   # 例: 20(少ないほど速い)
-IMAGE_SIZE = None            # 例: 768(出力の長辺。小さいほど速い)
+NUM_INFERENCE_STEPS = 20     # 初期値 30。少ないほど速い
+IMAGE_SIZE = 768             # 初期値 1024(出力の長辺)。小さいほど速い
 SPEED_MODE = None            # 例: "Extra Juiced 🔥 (more speed)"(モデルの選択肢と同じ文字列)
 
 

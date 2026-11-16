@@ -127,7 +127,7 @@ function updatePaperSummary() {
   } else {
     const { stats } = normalizeForPlotter(plotterResult, options);
     paperStatus.textContent =
-      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm・線 ${stats.strokes} 本` +
+      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm${stats.rotated ? "（紙を広く使うため 90° 回して置く）" : ""}・線 ${stats.strokes} 本` +
       `（短い線 ${stats.removed} 本を削除）・描く長さ ${(stats.drawMm / 1000).toFixed(2)} m`;
   }
 }

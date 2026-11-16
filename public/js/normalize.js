@@ -95,6 +95,7 @@ function pointBounds(pointLists) {
 const roundMm = value => Math.round(value * 1000) / 1000;
 
 // 結果全体を紙に収まる mm 座標へ変換する。
+// 紙を広く使えるなら、絵を 90° 回して置く(縦長の絵を横長の紙に描くときなど。絵の上が紙の左を向く)。
 // options: { paperWidth, paperHeight, minStrokeMm }(単位はすべて mm)
 // 戻り値: { data: 保存する JSON の中身, stats: 画面に出す集計 }
 function normalizeForPlotter(result, options) {
@@ -104,15 +105,26 @@ function normalizeForPlotter(result, options) {
   const bounds = pointBounds(sampled);
   const drawWidth = bounds.maxX - bounds.minX;
   const drawHeight = bounds.maxY - bounds.minY;
-  const scale = Math.min(paperWidth / drawWidth, paperHeight / drawHeight);
+  const straightScale = Math.min(paperWidth / drawWidth, paperHeight / drawHeight);
+  const rotatedScale = Math.min(paperWidth / drawHeight, paperHeight / drawWidth);
+  const rotated = rotatedScale > straightScale * 1.001;
+  const scale = rotated ? rotatedScale : straightScale;
+  // 紙の上での大きさ
+  const outWidth = (rotated ? drawHeight : drawWidth) * scale;
+  const outHeight = (rotated ? drawWidth : drawHeight) * scale;
 
   // 紙の中央に置く。画像は y が下向きなので反転する
-  const offsetX = (paperWidth - drawWidth * scale) / 2;
-  const offsetY = (paperHeight - drawHeight * scale) / 2;
-  const toMm = p => [
-    roundMm(offsetX + (p.x - bounds.minX) * scale),
-    roundMm(offsetY + (bounds.maxY - p.y) * scale)
-  ];
+  const offsetX = (paperWidth - outWidth) / 2;
+  const offsetY = (paperHeight - outHeight) / 2;
+  const toMm = rotated
+    ? p => [   // 90° 回す: 画像の下向き(y)→ 紙の右、画像の右(x)→ 紙の上
+      roundMm(offsetX + (p.y - bounds.minY) * scale),
+      roundMm(offsetY + (p.x - bounds.minX) * scale)
+    ]
+    : p => [
+      roundMm(offsetX + (p.x - bounds.minX) * scale),
+      roundMm(offsetY + (bounds.maxY - p.y) * scale)
+    ];
 
   const strokes = [];
   let removed = 0;
@@ -136,8 +148,9 @@ function normalizeForPlotter(result, options) {
     },
     stats: {
       scale,
-      width: drawWidth * scale,
-      height: drawHeight * scale,
+      rotated,
+      width: outWidth,
+      height: outHeight,
       strokes: strokes.length,
       removed,
       drawMm
