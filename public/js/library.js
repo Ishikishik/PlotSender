@@ -35,10 +35,6 @@ const DEFAULT_SETTINGS = {
   dotLengthPx: 6,   // 線にならない小さな塊(点)を描く短い線の長さ(px)。normalize の minStrokeMm より長くする
   junctionContinueMinScore: 0.15,
   segmentTurnMinScore: -0.35,
-  // 細線にしたときにできる小さなヒゲ・鉤・段を消す(髪の毛先や線の分かれ目で、元の絵にない折れになっていた)
-  spurMaxPx: 6,            // 分かれ目から出るこれ以下の長さの枝(ヒゲ)を消す(px)
-  hookMaxPx: 6,            // 線の端のこれ以下の長さで急に曲がる所(鉤)を切る(px)
-  pointSmoothRadius: 2,    // 線の点の位置を前後この点数で平均して、1 px の段をならす(端の点は動かさない)
   bezierEpsilon: 1.2,   // 曲線を単純化する細かさ(px)。2.8 では小さく曲がる所に最大 0.3 mm ほどの角が出た(図形のテスト画像で測定)
   widthSmoothRadius: 4,
   emulatorStepPx: 1.2,
@@ -198,7 +194,6 @@ function runPipeline(src, settings, timer = createTimer()) {
   const dist = t("距離変換", () => distanceMap(cleaned));
   const thin = t("細線化", () => zhangSuenFast(cleaned));
   const connected = t("端点接続", () => connectEndpoints(thin, cleaned, dist, settings));
-  t("ヒゲの除去", () => pruneSpurs(connected, settings.spurMaxPx));
   const rawSegments = t("線分割", () => extractSegments(connected, settings));
   const segments = t("短い線の除去", () => keepSmallFeatures(rawSegments,
     filterShortSegments(rawSegments, settings.minSegmentPoints, settings.minSegmentLength), cleaned, settings.smallFeatureMaxPx, settings.dotLengthPx));
@@ -665,80 +660,11 @@ function keepSmallFeatures(rawSegments, kept, bin, maxPx, dotPx = 6) {
 /* ベジェ化                                                            */
 /* ------------------------------------------------------------------ */
 
-// 細線(thin)の端点から分かれ目までが maxLen 以下の枝(ヒゲ)を消す(その場で書き換える)→ 消した枝の数
-// 太い線の端や、毛先のように 2 本がとがって合わさる所で、細線化が短い枝を作り、描くと鉤や段になっていた
-function pruneSpurs(thin, maxLen) {
-  if (!(maxLen > 0)) return 0;
-  const data = pixels(thin).data;
-  const cols = thin.cols;
-  let removed = 0;
-  for (let pass = 0; pass < 2; pass++) {
-    const ends = [];
-    for (let y = 1; y < thin.rows - 1; y++) {
-      for (let x = 1; x < cols - 1; x++) {
-        if (isWhite(thin, x, y) && neighborsOf(thin, x, y).length === 1) ends.push({ x, y });
-      }
-    }
-    let changed = false;
-    for (const e of ends) {
-      if (!isWhite(thin, e.x, e.y)) continue;
-      const branch = [e];
-      let prev = null, cur = e, reachedJunction = false;
-      while (branch.length <= maxLen) {
-        const ns = neighborsOf(thin, cur.x, cur.y).filter(n => !prev || n.x !== prev.x || n.y !== prev.y)
-          .filter(n => !branch.some(b => b.x === n.x && b.y === n.y));
-        if (ns.length === 0) break;                      // 孤立した短い線(口など)は消さない
-        if (ns.length > 1 || neighborsOf(thin, ns[0].x, ns[0].y).length > 2) { reachedJunction = true; break; }
-        prev = cur;
-        cur = ns[0];
-        branch.push(cur);
-      }
-      if (!reachedJunction || branch.length > maxLen) continue;
-      for (const b of branch) data[b.y * cols + b.x] = 0;
-      removed++;
-      changed = true;
-    }
-    if (!changed) break;
-  }
-  return removed;
-}
-
-// 線の両端の、maxPx 以下の長さで急に(60 度より大きく)曲がる部分(鉤)を切る → 新しい点の列
-function trimHooks(points, maxPx) {
-  if (!(maxPx > 0) || points.length < maxPx * 3) return points;
-  const trimEnd = pts => {
-    const n = pts.length;
-    for (let c = n - 1 - maxPx; c <= n - 3; c++) {
-      const b = pts[Math.max(0, c - 8)], m = pts[c], e = pts[n - 1];
-      const bx = m.x - b.x, by = m.y - b.y, tx = e.x - m.x, ty = e.y - m.y;
-      const bl = Math.hypot(bx, by), tl = Math.hypot(tx, ty);
-      if (bl < 1e-6 || tl < 1e-6) continue;
-      if ((bx * tx + by * ty) / (bl * tl) < 0.5) return pts.slice(0, c + 1);
-    }
-    return pts;
-  };
-  return trimEnd(trimEnd(points).slice().reverse()).reverse();
-}
-
-// 点の位置を前後 radius 点で平均する(両端の点は動かさない。端に近いほど範囲を狭める)
-function smoothPoints(points, radius) {
-  if (!(radius > 0) || points.length < 3) return points;
-  const n = points.length;
-  return points.map((p, i) => {
-    const r = Math.min(radius, i, n - 1 - i);
-    if (r === 0) return p;
-    let sx = 0, sy = 0;
-    for (let j = i - r; j <= i + r; j++) { sx += points[j].x; sy += points[j].y; }
-    return { x: sx / (2 * r + 1), y: sy / (2 * r + 1) };
-  });
-}
-
 function buildBezierStrokes(segments, dist, settings) {
   const strokes = [];
 
   for (let i = 0; i < segments.length; i++) {
-    const points = smoothPoints(trimHooks(segments[i], settings.hookMaxPx), settings.pointSmoothRadius);
-    const samples = attachWidthSamples(points, dist, settings.widthSmoothRadius);
+    const samples = attachWidthSamples(segments[i], dist, settings.widthSmoothRadius);
     const simplified = simplifySamples(samples, settings.bezierEpsilon);
     if (simplified.length < 2) continue;
 
@@ -1659,8 +1585,8 @@ function inBounds(mat, x, y) {
 }
 
 function localWidth(dist, x, y) {
-  if (!inBounds(dist, Math.round(x), Math.round(y))) return 1;
-  return pixelAt(dist, Math.round(x), Math.round(y)) * 2;
+  if (!inBounds(dist, x, y)) return 1;
+  return pixelAt(dist, x, y) * 2;
 }
 
 function cumulativeLengths(points) {

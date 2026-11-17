@@ -147,9 +147,6 @@ async function vectorizeImage(blob) {
     // 縦横 3 mm 以内の孤立した塊(口、鼻など)は、短くても線として残す。点は 0.5 mm の短い線で打つ
     settings.smallFeatureMaxPx = Math.round(3 / mmPerPx);
     settings.dotLengthPx = Math.max(2, Math.round(0.5 / mmPerPx));
-    // 細線化でできるヒゲと線の端の鉤は、紙の上で 0.5 mm 以下のものを消す
-    settings.spurMaxPx = Math.max(2, Math.round(0.5 / mmPerPx));
-    settings.hookMaxPx = Math.max(2, Math.round(0.5 / mmPerPx));
     let output = null;
 
     try {
