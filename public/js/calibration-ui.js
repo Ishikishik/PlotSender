@@ -1,7 +1,9 @@
 // パンタグラフのタブの一番下: 格子の写真から補正データを作ってサーバーへ送る。
-// 補正データ = 機構の寸法(geometry.js で逆算)+ 残りのずれの表(calibrate.js)。
+// 補正データ = 機構の寸法(geometry.js で逆算)+ 残りのずれの表(calibrate.js)+ 線の波の係数(wave.js)。
 //   寸法を合わせる: 補正なしの格子から寸法を逆算する。表は 0 にする(寸法が変わると前の表は合わないため)
 //   表を作る / 表を更新する: 寸法は機械が今使っているものを引き継ぎ、表だけを作る
+//   波の係数: Cal grid wave で描いた写真から、角度のむらの係数だけを作る(寸法と表は引き継ぐ)
+//   どのモードでも、作らないものは機械が今使っているものを引き継ぐ
 // 計算(calibrate.js、geometry.js)と OpenCV.js は重いので、送るボタンを押したときに初めて読み込む。
 // 送るには QR のトークンが要る(AI 生成と同じく 1 回で使い切り)。
 
@@ -15,6 +17,7 @@ const calDebug = document.querySelector("#cal-debug");
 let calRunning = false;
 let calScriptPromise = null;
 let geomScriptPromise = null;
+let waveScriptPromise = null;
 // 機械が今使っている補正データの番号(QR の URL に入っている。"0" はファームに入っている表)。
 // 「補正ありで描いた」ときは、サーバーの最新ではなく、この表に残りのずれを足す
 const calBase = new URLSearchParams(location.search).get("base");
@@ -50,6 +53,18 @@ function loadGeometryScript() {
   return geomScriptPromise;
 }
 
+function loadWaveScript() {
+  if (waveScriptPromise) return waveScriptPromise;
+  waveScriptPromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "./js/wave.js";
+    script.onload = resolve;
+    script.onerror = () => { waveScriptPromise = null; reject(new Error("wave.js を読み込めませんでした")); };
+    document.head.appendChild(script);
+  });
+  return waveScriptPromise;
+}
+
 // 機械が今使っている補正データ(QR の番号で探す)
 async function fetchMachineCorrection() {
   if (!calBase) throw new Error("機械が使っている補正データがわかりません。機械の画面の QR を読み取って開き直してください");
@@ -65,7 +80,8 @@ async function fetchMachineCorrection() {
 async function showCurrentCorrection() {
   try {
     const c = await fetchMachineCorrection();
-    calCurrent.textContent = `${c.version || "不明"}(番号 ${calBase}、寸法: ${c.geom ? "写真から逆算したもの" : "設計値"})`;
+    calCurrent.textContent = `${c.version || "不明"}(番号 ${calBase}、寸法: ${c.geom ? "写真から逆算したもの" : "設計値"}、` +
+      `波の係数: ${c.wave ? "写真から当てはめたもの" : "ファームの値"})`;
   } catch {
     calCurrent.textContent = calBase ? `番号 ${calBase}(サーバーにありません)` : "不明(機械の QR から開くとわかります)";
   }
@@ -84,7 +100,7 @@ function loadImage(file) {
 async function sendCalibration() {
   const file = calInput.files[0];
   if (calRunning || !file) return;
-  const mode = document.querySelector('input[name="cal-mode"]:checked').value;   // geometry / new / update
+  const mode = document.querySelector('input[name="cal-mode"]:checked').value;   // geometry / new / update / wave
   calRunning = true;
   updateCalButton();
   calLog.textContent = "";
@@ -93,7 +109,7 @@ async function sendCalibration() {
   let rgba = null, result = null;
   try {
     calStatus.textContent = "計算の準備をしています…(初回は数秒かかります)";
-    await Promise.all([loadOpenCv(), loadCalibrateScript(), loadGeometryScript()]);
+    await Promise.all([loadOpenCv(), loadCalibrateScript(), loadGeometryScript(), loadWaveScript()]);
     // 機械が今使っている補正データ(寸法の引き継ぎと、格子を描いたときの寸法を知るのに使う)
     const current = await fetchMachineCorrection();
     const used = current.geom || PlotGeometry.DEFAULT_GEOM;   // 格子を描いたときに機械が使っていた寸法
@@ -130,11 +146,20 @@ async function sendCalibration() {
       table = {
         nx: current.nx, ny: current.ny, x0: current.x0, y0: current.y0, step: current.step, dx: zeros, dy: zeros,
         dir: { cx: current.dir.cx, sx: current.dir.sx, cy: current.dir.cy, sy: current.dir.sy, xy: [0, 0, 0], yx: [0, 0, 0] },
-        mode: "geometry", geom: fit.geom,
+        mode: "geometry", geom: fit.geom, wave: current.wave || null,
+      };
+    } else if (mode === "wave") {
+      // 波の係数だけを作る。表と寸法は、機械が今使っているもの(この写真を描いたときのもの)をそのまま使う
+      calStatus.textContent = "線をなぞって、波の係数を当てはめています…";
+      await new Promise(r => setTimeout(r, 30));
+      result = PlotWave.fitWave(cv, rgba, current, { onLog });
+      table = {
+        nx: current.nx, ny: current.ny, x0: current.x0, y0: current.y0, step: current.step, dx: current.dx, dy: current.dy,
+        dir: current.dir, mode: "wave", geom: current.geom || null, wave: result.wave,
       };
     } else {
       result = makeCorrection(cv, rgba, { update: mode === "update", current, onLog });
-      table = { ...result.table, geom: current.geom || null };   // 寸法は機械が今使っているものを引き継ぐ
+      table = { ...result.table, geom: current.geom || null, wave: current.wave || null };   // 寸法と波の係数は引き継ぐ
     }
     cv.imshow(calDebug, result.debug);
     calDebug.hidden = false;
@@ -147,7 +172,9 @@ async function sendCalibration() {
     });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `送信に失敗しました(HTTP ${response.status})`);
-    calStatus.textContent = mode === "geometry"
+    calStatus.textContent = mode === "wave"
+      ? `波の係数を保存しました(${body.version}、番号 ${body.id})。パンタグラフの Setting のタブを開くと読み込みます(Wave: fitted)。`
+      : mode === "geometry"
       ? `機構の寸法を保存しました(${body.version}、番号 ${body.id})。パンタグラフの Setting のタブを開いて読み込み、` +
         "もう一度「Cal grid raw」で描いて、機械の QR を読み直してから「補正なしで描いた: 表を作る」で送ってください。"
       : `補正データを保存しました(${body.version}、番号 ${body.id})。パンタグラフの Setting のタブを開くと読み込みます。` +

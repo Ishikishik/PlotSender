@@ -173,9 +173,9 @@
   }
 
   // 機械座標の area を真上から見た画像にする(RGB)
-  function topView(cv, rgba, H, area) {
+  function topView(cv, rgba, H, area, scale = SCALE) {
     const [x0, y0, x1, y1] = area;
-    const P = [SCALE, 0, -x0 * SCALE, 0, -SCALE, y1 * SCALE, 0, 0, 1];
+    const P = [scale, 0, -x0 * scale, 0, -scale, y1 * scale, 0, 0, 1];
     const M = [];
     for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) {
       let s = 0;
@@ -185,7 +185,7 @@
     const rgb = new cv.Mat();
     cv.cvtColor(rgba, rgb, cv.COLOR_RGBA2RGB);
     const top = new cv.Mat(), mMat = cv.matFromArray(3, 3, cv.CV_64F, M);
-    cv.warpPerspective(rgb, top, mMat, new cv.Size(Math.round((x1 - x0) * SCALE), Math.round((y1 - y0) * SCALE)));
+    cv.warpPerspective(rgb, top, mMat, new cv.Size(Math.round((x1 - x0) * scale), Math.round((y1 - y0) * scale)));
     rgb.delete(); mMat.delete();
     return top;
   }
@@ -814,5 +814,7 @@
   }
 
   root.makeCorrection = makeCorrection;
+  // wave.js が使う部品
+  root.PlotCalibrate = { CONFIG, SHEET, MARKS, gridValues, photoToMachine, topView, inkMask };
   if (typeof module === "object" && module.exports) module.exports = { makeCorrection };
 })(typeof window !== "undefined" ? window : globalThis);

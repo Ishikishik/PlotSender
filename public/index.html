@@ -74,11 +74,12 @@
           <li>シートのまわりのマーカーと格子が全部写るように、真上から明るく撮る</li>
           <li>描き方に合うものを選んで、写真を送る(機械の画面の QR を読み取って開いたときだけ送れます)</li>
         </ol>
-        <p>はじめは 1 → 2 の順に。寸法が合っていれば、2 だけでよい。</p>
+        <p>はじめは 1 → 2 の順に。寸法が合っていれば、2 だけでよい。線の波が気になるときは、そのあと 4(&gt;_ の「Cal grid wave」で描く)。</p>
         <fieldset class="cal-mode">
           <label><input type="radio" name="cal-mode" value="geometry" checked> 1. 補正なしで描いた: 機構の寸法を合わせる(表は 0 に戻る)</label>
           <label><input type="radio" name="cal-mode" value="new"> 2. 補正なしで描いた: 表を作る(寸法は今のまま)</label>
           <label><input type="radio" name="cal-mode" value="update"> 3. 補正ありで描いた: 今の表に残りを足す</label>
+          <label><input type="radio" name="cal-mode" value="wave"> 4. Cal grid wave で描いた: 線の波の係数を作る</label>
         </fieldset>
         <input id="cal-input" type="file" accept="image/*">
         <button id="cal-send" type="button" disabled>補正データを作って送る</button>

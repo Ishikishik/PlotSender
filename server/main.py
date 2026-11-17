@@ -83,6 +83,18 @@ def check_table(t: dict) -> dict:
         for k in ("d", "l1a", "l1b", "l2a", "l2b", "e"):
             if out["geom"][k] <= 0:
                 raise ValueError(f"長さが 0 以下: {k}")
+    # 線の波(モーターの角度のむら)の係数。無いときは、機械はファームの値を使う
+    if t.get("wave") is not None:
+        w = t["wave"]
+        h = [number(v, 16) for v in w["h"]]
+        if not (1 <= len(h) <= 6) or any(v <= 0 for v in h):
+            raise ValueError("波の成分の数か周波数")
+        wave = {"h": h}
+        for axis in ("a", "b"):
+            wave[axis] = {k: [number(v, 0.5) for v in w[axis][k]] for k in ("cos", "sin")}
+            if any(len(wave[axis][k]) != len(h) for k in ("cos", "sin")):
+                raise ValueError("波の係数の数")
+        out["wave"] = wave
     return out
 
 
