@@ -2,7 +2,8 @@ const imageInput = document.querySelector("#image-input");
 const imagePreview = document.querySelector("#image-preview");
 const imageStatus = document.querySelector("#image-status");
 
-const sendToAiButton = document.querySelector("#send-to-ai");
+// 2 つのボタン: ほどほど(細かい繰り返しの模様はまとめる) / 細かく(全部描く)。data-mode をサーバーへ送る(server/ai.py の PROMPTS)
+const sendToAiButtons = [document.querySelector("#send-to-ai"), document.querySelector("#send-to-ai-scene")];
 const aiStatus = document.querySelector("#ai-status");
 const aiPreview = document.querySelector("#ai-preview");
 const connectEspButton = document.querySelector("#connect-esp");
@@ -16,7 +17,7 @@ let tokenKind = "serial"; // "serial"(Web Serial、1分ごと)か "qr"(QR、15�
 let aiPreviewUrl = null;
 
 function updateSendButton() {
-  sendToAiButton.disabled = sending || !imageReady || !latestToken;
+  for (const button of sendToAiButtons) button.disabled = sending || !imageReady || !latestToken;
 }
 
 function clearPreview() {
@@ -91,7 +92,7 @@ async function shrinkForUpload(file) {
 const formatMb = bytes => (bytes / 1024 / 1024).toFixed(1) + "MB";
 
 // 選択した画像を自分のサーバーに送信する。
-async function sendPhotoToAI() {
+async function sendPhotoToAI(mode = "moderate") {
   const file = imageInput.files[0];
   if (sending || !imageReady || !file) return;
 
@@ -107,6 +108,7 @@ async function sendPhotoToAI() {
     formData.append("image", upload, upload === file ? file.name : "photo.jpg");
     formData.append("token", latestToken);
     formData.append("token_kind", tokenKind);
+    formData.append("mode", mode);
     aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）" +
       (upload === file ? "" : `［送信 ${formatMb(file.size)} → ${formatMb(upload.size)}］`);
     const sentAt = performance.now();
@@ -161,7 +163,7 @@ function describeTimings(totalMs, header) {
   return `（全体 ${sec(totalMs)}${parts.length ? "：" + parts.join("・") : ""}）`;
 }
 
-sendToAiButton.addEventListener("click", sendPhotoToAI);
+for (const button of sendToAiButtons) button.addEventListener("click", () => sendPhotoToAI(button.dataset.mode));
 
 // ESP32 と Web Serial で接続し、毎分届く "TOTP 123456" の行からトークンを保存する。
 onSerialReceive((line) => {

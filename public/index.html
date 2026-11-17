@@ -53,7 +53,10 @@
         </div>
         <button id="connect-esp" type="button">ESP32と接続</button>
         <span id="esp-status" role="status"></span>
-        <button id="send-to-ai" type="button" disabled>Send to AI</button>
+        <div class="send-ai">
+          <button id="send-to-ai" type="button" data-mode="moderate" disabled>ほどほど AI へ</button>
+          <button id="send-to-ai-scene" type="button" data-mode="detailed" disabled>細かく AI へ</button>
+        </div>
         <p id="ai-status" role="status" aria-live="polite"></p>
       </div>
       <div class="plot-result">

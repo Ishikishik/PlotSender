@@ -23,15 +23,31 @@ MODEL_URL = "https://api.replicate.com/v1/models/prunaai/flux-kontext-fast/predi
 # 前は "Main contours only, minimal detail." で、輪郭だけの簡単すぎる線画になった(神奈川沖浪裏の波しぶきや舟、えるの口など)。
 # 機械が速く描けるようになったので、内側の線も描かせる。ただし塗り・影・斜線は機械が苦手なので禁止のまま
 # 神奈川沖浪裏で線 1299 本・描く長さ 4.1 m になったが、描いてみると潰れずに良かった(プレビューは実物より黒く見える)
-PROMPT = (
+# ページの 2 つのボタンで選ぶ(mode)。どちらも背景まで描く
+#   detailed: 細かいところまで全部(神奈川沖浪裏で線 1299 本・4.1 m。描いてみると潰れずに良かった)
+#   moderate: 細かい繰り返しの模様(しぶき、泡、草、葉、点)はまとめさせる。顔や服の大事な線はそのまま
+_DETAILED = (
     "Detailed black ink line art for a pen plotter. "
     "Clean, thin, smooth continuous strokes of fairly even width. "
     "Keep the main contours and also the important inner lines: "
     "facial features (eyes, eyebrows, nose, mouth), hair strands, clothing folds, "
     "patterns, and small objects in the scene. "
+)
+_RULES = (
     "White background, all areas left unfilled. "
     "No color, no solid black areas, no shading, no hatching, no dry-brush texture."
 )
+PROMPTS = {
+    "detailed": _DETAILED + _RULES,
+    "moderate": (
+        _DETAILED
+        + "Moderate detail: simplify tiny repeated textures (spray, foam, grass, leaves, dots) "
+        "into a few clear strokes instead of drawing every one. "
+        + _RULES
+    ),
+}
+DEFAULT_MODE = "moderate"
+PROMPT = PROMPTS[DEFAULT_MODE]   # 前からの名前(ほかで使っていれば)
 
 POLL_INTERVAL = 1.5  # 完成を確認する間隔（秒）
 TIMEOUT = 90         # これ以上かかったら諦める（秒）
@@ -57,7 +73,7 @@ def _parse_time(text) -> float | None:
         return None
 
 
-async def process_image(data: bytes, content_type: str, api_token: str) -> tuple[bytes, str, dict]:
+async def process_image(data: bytes, content_type: str, api_token: str, mode: str = DEFAULT_MODE) -> tuple[bytes, str, dict]:
     """画像を線画に変換して (画像データ, Content-Type, かかった時間 [ms]) を返す。
 
     かかった時間:
@@ -75,7 +91,7 @@ async def process_image(data: bytes, content_type: str, api_token: str) -> tuple
     data_uri = f"data:{content_type};base64,{base64.b64encode(data).decode('ascii')}"
     body = {
         "input": {
-            "prompt": PROMPT,
+            "prompt": PROMPTS.get(mode, PROMPTS[DEFAULT_MODE]),
             "img_cond_path": data_uri,   # 入力画像。出力の縦横比もこれに合わせる
             "output_format": "png",      # 線画なので JPEG のにじみが出ない PNG にする
         }

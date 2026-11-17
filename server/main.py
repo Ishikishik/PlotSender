@@ -319,6 +319,9 @@ class Default(WorkerEntrypoint):
         token = form["token"] if "token" in form else ""
         kind = form["token_kind"] if "token_kind" in form else "serial"
         image = form["image"] if "image" in form else None
+        mode = form["mode"] if "mode" in form else "moderate"   # detailed: 細かく、moderate: ほどほど(ai.py の PROMPTS)
+        if mode not in ("detailed", "moderate"):
+            mode = "moderate"
 
         if image is None or isinstance(image, str):
             return error("画像がありません", 400)
@@ -335,14 +338,14 @@ class Default(WorkerEntrypoint):
             return error(detail, 401)
         succeeded = False
         try:
-            response, succeeded = await self.run_ai(image)
+            response, succeeded = await self.run_ai(image, mode)
             return response
         finally:
             # AI が失敗したら、QR のトークンをもう一度使えるように戻す(使い切りは成功した 1 回だけ)
             if detail and not succeeded:
                 await self.env.KV.delete(detail)
 
-    async def run_ai(self, image):
+    async def run_ai(self, image, mode="moderate"):
         """AI で線画にする。(返すレスポンス, 成功したか) を返す。"""
         api_token = getattr(self.env, "REPLICATE_API_TOKEN", None)
         if not api_token:
@@ -351,7 +354,7 @@ class Default(WorkerEntrypoint):
         t = time.time()
         try:
             data, content_type, timings = await process_image(
-                await image.bytes(), image.content_type, api_token
+                await image.bytes(), image.content_type, api_token, mode
             )
         except AIError as e:
             return error(str(e), 502), False

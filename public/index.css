@@ -138,8 +138,15 @@ h1 {
   flex-shrink: 0;
 }
 
+.send-ai {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 #image-input,
 #send-to-ai,
+#send-to-ai-scene,
 #download-plot {
   display: block;
   margin-top: 12px;
@@ -148,6 +155,7 @@ h1 {
 }
 
 #send-to-ai,
+#send-to-ai-scene,
 #download-plot {
   background: white;
   color: black;
@@ -157,6 +165,7 @@ h1 {
 }
 
 #send-to-ai:disabled,
+#send-to-ai-scene:disabled,
 #download-plot:disabled {
   cursor: not-allowed;
 }
