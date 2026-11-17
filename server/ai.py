@@ -22,12 +22,15 @@ MODEL_URL = "https://api.replicate.com/v1/models/prunaai/flux-kontext-fast/predi
 
 # 前は "Main contours only, minimal detail." で、輪郭だけの簡単すぎる線画になった(神奈川沖浪裏の波しぶきや舟、えるの口など)。
 # 機械が速く描けるようになったので、内側の線も描かせる。ただし塗り・影・斜線は機械が苦手なので禁止のまま
+# 内側の線を描かせるだけだと、神奈川沖浪裏で線 1299 本・4.1 m になり、0.3 mm のペンでは潰れた。細かい繰り返しの模様はまとめさせる
 PROMPT = (
     "Detailed black ink line art for a pen plotter. "
     "Clean, thin, smooth continuous strokes of fairly even width. "
     "Keep the main contours and also the important inner lines: "
     "facial features (eyes, eyebrows, nose, mouth), hair strands, clothing folds, "
     "patterns, and small objects in the scene. "
+    "Moderate detail: simplify tiny repeated textures (spray, foam, grass, leaves, dots) "
+    "into a few clear strokes instead of drawing every one. "
     "White background, all areas left unfilled. "
     "No color, no solid black areas, no shading, no hatching, no dry-brush texture."
 )
