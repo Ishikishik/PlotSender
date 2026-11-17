@@ -144,6 +144,9 @@ async function vectorizeImage(blob) {
     settings.fillMinArea = Math.max(40, Math.round((penPx * 4) ** 2));
     // 1.5 mm 以内で、間が元の画像の黒なら、ペンを上げずにつなぐ(交点で分かれた線どうし)
     settings.joinMaxPx = Math.max(2, Math.round(1.5 / mmPerPx));
+    // 縦横 3 mm 以内の孤立した塊(口、鼻など)は、短くても線として残す。点は 0.5 mm の短い線で打つ
+    settings.smallFeatureMaxPx = Math.round(3 / mmPerPx);
+    settings.dotLengthPx = Math.max(2, Math.round(0.5 / mmPerPx));
     let output = null;
 
     try {

@@ -28,6 +28,7 @@ const sendPlotStatus = document.querySelector("#send-plot-status");
 // photo.js は AI 生成のあとで QR のトークンを消すので、ここで先に覚えておく
 let sdQrToken = (typeof qrToken === "string" && /^\d{6}$/.test(qrToken)) ? qrToken : null;
 let sdSending = false;
+let sdLastFlipped = null;   // 最後に送った絵で、描く向きを逆にした線の数(geometry.js がなければ null)
 
 function uuidBytes() {
   const hex = (crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))]
@@ -131,9 +132,10 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
   const W = data.paper.width, H = data.paper.height;
   const mx = (x) => (SD_ROTATE_180 ? W - x : x) + SD_PAPER_ORIGIN.x;
   const my = (y) => (SD_ROTATE_180 ? H - y : y) + SD_PAPER_ORIGIN.y;
+  sdLastFlipped = null;
   if (typeof PlotGeometry !== "undefined") {
-    const flipped = orientStrokesForMotors(strokes, (x, y) => [mx(x), my(y)]);
-    console.log(`線の向き: ${flipped} 本を逆向きにしました(描き始めがモーターの止まりかけにならないように)`);
+    sdLastFlipped = orientStrokesForMotors(strokes, (x, y) => [mx(x), my(y)]);
+    console.log(`線の向き: ${sdLastFlipped} 本を逆向きにしました(描き始めがモーターの止まりかけにならないように)`);
   }
   // 塗り: 輪は 255 個まで、点は 1 輪 65535 個まで。機械は 1 つの塗りで 4000 点・32 輪までしか使わない
   const fills = (data.fills || []).map(rings => rings.slice(0, 32).filter(r => r.length >= 6))
@@ -257,7 +259,8 @@ sendPlotButton.addEventListener("click", async () => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     if (auth.kind === "qr") sdQrToken = null;   // QR の保存は 1 回だけ
-    sendPlotStatus.textContent = `送りました（${(bez.length / 1024).toFixed(1)} KB${starred ? "・★" : ""}）。` +
+    sendPlotStatus.textContent = `送りました（${(bez.length / 1024).toFixed(1)} KB${starred ? "・★" : ""}` +
+      `${sdLastFlipped === null ? "" : `・向きを変えた線 ${sdLastFlipped} 本`}）。` +
       `機械が Wi-Fi で取りに来ると SD に入ります（30 秒ほど）。機械の待ち: ${body.waiting} 枚`;
   } catch (error) {
     sendPlotStatus.textContent = `送れませんでした（${error.message}）`;

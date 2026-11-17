@@ -29,6 +29,10 @@ const DEFAULT_SETTINGS = {
   endpointMaxWidthRatio: 3.2,
   minSegmentPoints: 10,
   minSegmentLength: 10,
+  // これより小さい(縦横とも)孤立した黒の塊は、短くても線として残す(口、鼻、目の小さな線など)。
+  // 短い線の除去は分岐の小さなヒゲを消すためのもので、前は 2 mm ほどの口が半分以上消え、点の鼻は全部消えていた
+  smallFeatureMaxPx: 40,
+  dotLengthPx: 6,   // 線にならない小さな塊(点)を描く短い線の長さ(px)。normalize の minStrokeMm より長くする
   junctionContinueMinScore: 0.15,
   segmentTurnMinScore: -0.35,
   bezierEpsilon: 1.2,   // 曲線を単純化する細かさ(px)。2.8 では小さく曲がる所に最大 0.3 mm ほどの角が出た(図形のテスト画像で測定)
@@ -66,6 +70,7 @@ const SETTING_INFO = {
   endpointMaxWidthRatio:    { group: "端点接続", label: "太さがこの倍率以上違う端点はつながない", min: 1, step: 0.1 },
   minSegmentPoints:         { group: "線分割",   label: "線とみなす最小の点数", min: 1, step: 1 },
   minSegmentLength:         { group: "線分割",   label: "線とみなす最小の長さ（px）", min: 0, step: 1 },
+  smallFeatureMaxPx:        { group: "線分割",   label: "これより小さい孤立した塊は短くても残す（px、口や鼻）", min: 0, step: 1 },
   junctionContinueMinScore: { group: "線分割",   label: "分岐点でまっすぐ進み続ける最小スコア", min: -1, max: 1, step: 0.05 },
   segmentTurnMinScore:      { group: "線分割",   label: "これより急に曲がったら線を切る", min: -1, max: 1, step: 0.05 },
   bezierEpsilon:            { group: "ベジェ化", label: "点の間引き量（RDPの許容誤差 px, 大きいほど粗い）", min: 0.1, step: 0.1 },
@@ -186,8 +191,8 @@ function runPipeline(src, settings, timer = createTimer()) {
   const thin = t("細線化", () => zhangSuenFast(cleaned));
   const connected = t("端点接続", () => connectEndpoints(thin, cleaned, dist, settings));
   const rawSegments = t("線分割", () => extractSegments(connected, settings));
-  const segments = t("短い線の除去", () =>
-    filterShortSegments(rawSegments, settings.minSegmentPoints, settings.minSegmentLength));
+  const segments = t("短い線の除去", () => keepSmallFeatures(rawSegments,
+    filterShortSegments(rawSegments, settings.minSegmentPoints, settings.minSegmentLength), cleaned, settings.smallFeatureMaxPx, settings.dotLengthPx));
   const strokes = t("ベジェ化", () => buildBezierStrokes(segments, dist, settings));
   const fills = t("塗りつぶし抽出", () =>
     settings.fillEnabled ? extractFillRegions(cleaned, dist, settings) : []);
@@ -608,6 +613,43 @@ function traceSegment(thin, start, next, usedEdges, settings) {
 
 function filterShortSegments(segments, minPoints, minLength) {
   return segments.filter(points => points.length >= minPoints && pathLength(points) >= minLength);
+}
+
+// 小さな孤立した塊(縦横とも maxPx 以下)の線は、短くても全部残す。線が 1 本もない塊(点)は、短い点の線にする
+// kept: filterShortSegments の結果 → kept に足したもの
+function keepSmallFeatures(rawSegments, kept, bin, maxPx, dotPx = 6) {
+  if (!(maxPx > 0)) return kept;
+  const labels = new cv.Mat();
+  const stats = new cv.Mat();
+  const centroids = new cv.Mat();
+  const count = cv.connectedComponentsWithStats(bin, labels, stats, centroids, 8, cv.CV_32S);
+  const small = new Array(count).fill(false);
+  for (let label = 1; label < count; label++) {
+    small[label] = pixelAt(stats, cv.CC_STAT_WIDTH, label) <= maxPx && pixelAt(stats, cv.CC_STAT_HEIGHT, label) <= maxPx;
+  }
+  const labelData = pixels(labels).data;
+  const labelOf = p => labelData[p.y * bin.cols + p.x];
+  const keptSet = new Set(kept);
+  const hasSegment = new Array(count).fill(false);
+  const out = kept.slice();
+  for (const points of rawSegments) {
+    const label = labelOf(points[0]);
+    if (!small[label]) continue;
+    if (points.length >= 2) hasSegment[label] = true;
+    if (!keptSet.has(points) && points.length >= 2) out.push(points);
+  }
+  for (const points of kept) hasSegment[labelOf(points[0])] = true;
+  // 線にならなかった小さな塊(点の鼻など)は、重心に dotPx の短い横線を置く(紙の上で 0.5 mm ほど。ペン幅と合わせて点に見える)
+  for (let label = 1; label < count; label++) {
+    if (!small[label] || hasSegment[label]) continue;
+    const cx = Math.round(centroids.doubleAt(label, 0)), cy = Math.round(centroids.doubleAt(label, 1));
+    const h = Math.max(1, Math.round(dotPx / 2));
+    out.push([{ x: cx - h, y: cy }, { x: cx + h, y: cy }]);
+  }
+  labels.delete();
+  stats.delete();
+  centroids.delete();
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

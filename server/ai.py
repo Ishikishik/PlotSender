@@ -20,12 +20,16 @@ from workers import fetch
 
 MODEL_URL = "https://api.replicate.com/v1/models/prunaai/flux-kontext-fast/predictions"
 
+# 前は "Main contours only, minimal detail." で、輪郭だけの簡単すぎる線画になった(神奈川沖浪裏の波しぶきや舟、えるの口など)。
+# 機械が速く描けるようになったので、内側の線も描かせる。ただし塗り・影・斜線は機械が苦手なので禁止のまま
 PROMPT = (
-    "Simple black brush line art for a pen plotter. "
-    "Uniform black ink, varying line width, smooth continuous strokes. "
-    "Main contours only, minimal detail. "
-    "White background and unfilled interiors. "
-    "No color, shading, hatching, or dry-brush texture."
+    "Detailed black ink line art for a pen plotter. "
+    "Clean, thin, smooth continuous strokes of fairly even width. "
+    "Keep the main contours and also the important inner lines: "
+    "facial features (eyes, eyebrows, nose, mouth), hair strands, clothing folds, "
+    "patterns, and small objects in the scene. "
+    "White background, all areas left unfilled. "
+    "No color, no solid black areas, no shading, no hatching, no dry-brush texture."
 )
 
 POLL_INTERVAL = 1.5  # 完成を確認する間隔（秒）
