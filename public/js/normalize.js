@@ -114,10 +114,12 @@ const roundMm = value => Math.round(value * 1000) / 1000;
 
 // 結果全体を紙に収まる mm 座標へ変換する。
 // 紙を広く使えるなら、絵を 90° 回して置く(縦長の絵を横長の紙に描くときなど。絵の上が紙の左を向く)。
-// options: { paperWidth, paperHeight, minStrokeMm }(単位はすべて mm)
+// options: { paperWidth, paperHeight, minStrokeMm, marginX }(単位はすべて mm)。marginX: 紙の左右に空ける幅
 // 戻り値: { data: 保存する JSON の中身, stats: 画面に出す集計 }
 function normalizeForPlotter(result, options) {
   const { paperWidth, paperHeight, minStrokeMm } = options;
+  const marginX = options.marginX || 0;
+  const fitWidth = paperWidth - 2 * marginX;   // 絵を収める幅
   const kinds = [];
   const joins = [];   // joins[i]: 前の線にペンを上げずにつなぐ(library.js の markJoins)
   const paths = orderedPaths(result, kinds, joins);
@@ -125,8 +127,8 @@ function normalizeForPlotter(result, options) {
   const bounds = pointBounds(sampled);
   const drawWidth = bounds.maxX - bounds.minX;
   const drawHeight = bounds.maxY - bounds.minY;
-  const straightScale = Math.min(paperWidth / drawWidth, paperHeight / drawHeight);
-  const rotatedScale = Math.min(paperWidth / drawHeight, paperHeight / drawWidth);
+  const straightScale = Math.min(fitWidth / drawWidth, paperHeight / drawHeight);
+  const rotatedScale = Math.min(fitWidth / drawHeight, paperHeight / drawWidth);
   const rotated = rotatedScale > straightScale * 1.001;
   const scale = rotated ? rotatedScale : straightScale;
   // 紙の上での大きさ
