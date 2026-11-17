@@ -40,10 +40,12 @@ _RULES = (
 PROMPTS = {
     "detailed": _DETAILED + _RULES,
     # 最初のプロンプト(輪郭だけの簡単な線画)。アニメの人物だけの絵は、これで描いた方がすっきりする
+    # 最初のままだと、同じ写真でも背景を描くことがあった(AI の出力は毎回変わる)ので、主役だけを描く 1 文を足した
     "moderate": (
         "Simple black brush line art for a pen plotter. "
         "Uniform black ink, varying line width, smooth continuous strokes. "
         "Main contours only, minimal detail. "
+        "Draw only the main subject; leave the background and scenery plain white. "
         "White background and unfilled interiors. "
         "No color, shading, hatching, or dry-brush texture."
     ),
