@@ -2,7 +2,7 @@ const imageInput = document.querySelector("#image-input");
 const imagePreview = document.querySelector("#image-preview");
 const imageStatus = document.querySelector("#image-status");
 
-// 2 つのボタン: ほどほど(細かい繰り返しの模様はまとめる) / 細かく(全部描く)。data-mode をサーバーへ送る(server/ai.py の PROMPTS)
+// 2 つのボタン: ほどほど(最初のプロンプト。輪郭だけの簡単な線画) / 細かく(内側の線や背景まで描く)。data-mode をサーバーへ送る(server/ai.py の PROMPTS)
 const sendToAiButtons = [document.querySelector("#send-to-ai"), document.querySelector("#send-to-ai-scene")];
 const aiStatus = document.querySelector("#ai-status");
 const aiPreview = document.querySelector("#ai-preview");

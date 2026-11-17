@@ -23,9 +23,9 @@ MODEL_URL = "https://api.replicate.com/v1/models/prunaai/flux-kontext-fast/predi
 # 前は "Main contours only, minimal detail." で、輪郭だけの簡単すぎる線画になった(神奈川沖浪裏の波しぶきや舟、えるの口など)。
 # 機械が速く描けるようになったので、内側の線も描かせる。ただし塗り・影・斜線は機械が苦手なので禁止のまま
 # 神奈川沖浪裏で線 1299 本・描く長さ 4.1 m になったが、描いてみると潰れずに良かった(プレビューは実物より黒く見える)
-# ページの 2 つのボタンで選ぶ(mode)。どちらも背景まで描く
+# ページの 2 つのボタンで選ぶ(mode)
 #   detailed: 細かいところまで全部(神奈川沖浪裏で線 1299 本・4.1 m。描いてみると潰れずに良かった)
-#   moderate: 細かい繰り返しの模様(しぶき、泡、草、葉、点)はまとめさせる。顔や服の大事な線はそのまま
+#   moderate: 最初のプロンプト。輪郭だけの簡単な線画
 _DETAILED = (
     "Detailed black ink line art for a pen plotter. "
     "Clean, thin, smooth continuous strokes of fairly even width. "
@@ -39,11 +39,13 @@ _RULES = (
 )
 PROMPTS = {
     "detailed": _DETAILED + _RULES,
+    # 最初のプロンプト(輪郭だけの簡単な線画)。アニメの人物だけの絵は、これで描いた方がすっきりする
     "moderate": (
-        _DETAILED
-        + "Moderate detail: simplify tiny repeated textures (spray, foam, grass, leaves, dots) "
-        "into a few clear strokes instead of drawing every one. "
-        + _RULES
+        "Simple black brush line art for a pen plotter. "
+        "Uniform black ink, varying line width, smooth continuous strokes. "
+        "Main contours only, minimal detail. "
+        "White background and unfilled interiors. "
+        "No color, shading, hatching, or dry-brush texture."
     ),
 }
 DEFAULT_MODE = "moderate"
