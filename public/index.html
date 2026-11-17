@@ -11,6 +11,7 @@
   <script defer src="./js/normalize.js"></script>
   <script defer src="./js/vectorize.js"></script>
   <script defer src="./js/photo.js"></script>
+  <script defer src="./js/sdsend.js"></script>
   <script defer src="./js/calibration-ui.js"></script>
   <script defer src="./js/health.js"></script>
 </head>
@@ -60,6 +61,13 @@
           <canvas id="plot-preview" hidden></canvas>
         </div>
         <button id="download-plot" type="button" disabled>JSON保存</button>
+        <div class="send-plot">
+          <label for="plot-name">名前</label>
+          <input id="plot-name" type="text" maxlength="40" autocomplete="off" placeholder="例: ねこ">
+          <button id="plot-star" type="button" aria-pressed="false" title="星なし: 機械で古いものから消える">☆</button>
+          <button id="send-plot" type="button" disabled>プロッタの SD へ送る</button>
+        </div>
+        <p id="send-plot-status" role="status" aria-live="polite"></p>
         <p id="plot-status" role="status" aria-live="polite"></p>
         <p id="paper-status" role="status" aria-live="polite"></p>
       </div>

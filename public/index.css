@@ -161,6 +161,42 @@ h1 {
   cursor: not-allowed;
 }
 
+.send-plot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+#plot-name {
+  flex: 1 1 8em;
+  min-width: 0;
+  font: inherit;
+  padding: 2px 6px;
+  border: 1px solid black;
+  border-radius: 4px;
+}
+
+#plot-star,
+#send-plot {
+  font: inherit;
+  background: white;
+  color: black;
+  border: 1px solid black;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+#plot-star[aria-pressed="true"] {
+  color: #c79100;
+  border-color: #c79100;
+}
+
+#send-plot:disabled {
+  cursor: not-allowed;
+}
+
 .image-upload:focus-within .upload-box {
   outline: 2px solid black;
   outline-offset: 3px;

@@ -5,8 +5,14 @@
 /T/<6桁>    … パンタグラフの画面の QR から来る。トークンを付けてパンタグラフのタブへ移動させる
 /api/correction … パンタグラフの補正データ。GET で最新を返す(ESP32 とページが読む)、
                   POST でページが作った表を受け取って保存する(QR のトークンを 1 回使う)
+/api/plots       … ページが作った絵(.bez)を、パンタグラフが取りに来るまで預かる
+    POST /api/plots                 ページから {token, token_kind, data(base64)}。番号(UUID)を付けて預かる
+    GET  /api/plots/pending?token=  機械から(機械の鍵の TOTP)。まだ取りに来ていない絵の一覧
+    GET  /api/plots/file?id=&token= 機械から。絵のデータ(base64 の文字列)
+    POST /api/plots/ack?id=&token=  機械から。SD に保存し終わった絵を消す
 """
 
+import base64
 import json
 import math
 import time
@@ -36,6 +42,28 @@ CORRECTION_KEY = "correction:latest"
 CORRECTION_ID_PREFIX = "correction:id:"     # 番号ごとの補正データ(機械が使っている表を「更新」の元にするため)
 CORRECTION_COUNTER = "correction:counter"
 CORRECTION_KEEP_SEC = 90 * 24 * 3600         # 番号ごとの補正データを残す期間
+
+
+PLOTS_PENDING_KEY = "plots:pending"        # まだ機械が取りに来ていない絵の一覧(JSON の配列)
+PLOT_PREFIX = "plot:"                      # 絵のデータ(base64)。番号は UUID
+PLOT_KEEP_SEC = 30 * 24 * 3600             # 取りに来なかった絵を預かる期間
+PLOT_MAX_BYTES = 1500 * 1024               # 1 枚の絵の大きさの上限
+
+
+def check_plot(data_b64: str):
+    """ページから届いた絵(.bez の BEZ2 形式、base64)を確かめる → (中身, 番号, 名前, 星)。おかしければ ValueError
+    形式は firm/src/jobs/SdPlot.h と public/js/sdsend.js の先頭に書いてある:
+      "BEZ2", 線の数 u16, 印 u8(1 = 星), 名前のバイト数 u8, 作った時刻 u32, UUID 16 バイト, 名前(UTF-8), 線…"""
+    raw = base64.b64decode(data_b64, validate=True)
+    if len(raw) > PLOT_MAX_BYTES:
+        raise ValueError("絵が大きすぎる")
+    if len(raw) < 28 or raw[:4] != b"BEZ2" or len(raw) < 28 + raw[7]:
+        raise ValueError("形式が違う")
+    plot_id = raw[12:28].hex()
+    if plot_id == "0" * 32:
+        raise ValueError("番号がない")
+    name = raw[28:28 + raw[7]].decode("utf-8")
+    return raw, plot_id, name, bool(raw[6] & 1)
 
 
 def base36(n: int) -> str:
@@ -108,6 +136,8 @@ class Default(WorkerEntrypoint):
             return await self.ai(request)
         if path == "/api/correction":
             return await self.correction(request)
+        if path.startswith("/api/plots"):
+            return await self.plots(request, path[len("/api/plots"):])
         if path[:3] in ("/T/", "/t/"):
             return self.qr_redirect(path[3:])
         return error("Not found", 404)
@@ -157,6 +187,68 @@ class Default(WorkerEntrypoint):
         # 期限が切れたあとは番号が照合に出てこないので、記録も 15 分ほどで消してよい。
         await used.put(used_key, "1", expirationTtl=QR_VALID_SEC + 60)
         return True, used_key
+
+    async def plots(self, request, sub):
+        """絵を預かって、機械に渡す(ファイルの先頭のコメントを参照)"""
+        store = getattr(self.env, "KV", None)
+        if store is None:
+            return error("サーバーに KV が設定されていません", 500)
+        nocache = {"Cache-Control": "no-store"}
+        query = parse_qs(urlsplit(request.url).query)
+
+        async def pending():
+            text = await store.get(PLOTS_PENDING_KEY)
+            return json.loads(text) if text else []
+
+        if sub == "" and request.method == "POST":
+            # ページから。QR のトークンなら、AI 生成とは別に「保存 1 回」として使う
+            try:
+                body = json.loads(await request.text())
+                raw, plot_id, name, starred = check_plot(str(body["data"]))
+            except (ValueError, KeyError, TypeError) as e:
+                return error(f"絵のデータが正しくありません({e})", 400)
+            token, kind = str(body.get("token", "")), str(body.get("token_kind", "serial"))
+            if kind == "qr":
+                mode, step = self.find_qr_machine(token)
+                if mode != "b":
+                    return error("QR のトークンが正しくないか、15分の期限が切れています", 401)
+                used_key = f"qrsave:{mode}:{step}"
+                if await store.get(used_key) is not None:
+                    return error("この QR ではもう保存しました。新しい QR を読み取ってください", 401)
+                await store.put(used_key, "1", expirationTtl=QR_VALID_SEC + 60)
+            elif not verify_totp(token, self.env.TOTP_KEY):
+                return error("トークンが正しくありません", 401)
+            # 番号はページが付けた UUID(機械はこれをファイル名にする)。同じ番号を 2 回は受け取らない
+            if await store.get(PLOT_PREFIX + plot_id) is not None:
+                return error("同じ番号の絵がもう届いています", 409)
+            await store.put(PLOT_PREFIX + plot_id, base64.b64encode(raw).decode(), expirationTtl=PLOT_KEEP_SEC)
+            items = await pending()
+            items.append({"id": plot_id, "size": len(raw), "name": name,
+                          "starred": starred, "at": int(time.time())})
+            await store.put(PLOTS_PENDING_KEY, json.dumps(items, ensure_ascii=False))
+            return Response.json({"ok": True, "id": plot_id, "waiting": len(items)}, headers=nocache)
+
+        # ここから下は機械から(機械の鍵の TOTP。60 秒ごとに変わる)
+        if not verify_totp(query.get("token", [""])[0], self.env.TOTP_KEY):
+            return error("トークンが正しくありません", 401, **nocache)
+        plot_id = query.get("id", [""])[0]
+        if sub == "/pending" and request.method == "GET":
+            # 機械は名前などを .bez の中から読むので、番号と大きさだけを渡す(ESP32 で読みやすいように)
+            items = await pending()
+            return Response.json({"plots": [{"id": i["id"], "size": i["size"]} for i in items]}, headers=nocache)
+        if not (len(plot_id) == 32 and all(c in "0123456789abcdef" for c in plot_id)):
+            return error("番号が正しくありません", 400, **nocache)
+        if sub == "/file" and request.method == "GET":
+            text = await store.get(PLOT_PREFIX + plot_id)
+            if text is None:
+                return error("その絵はありません", 404, **nocache)
+            return Response(text, headers={"Content-Type": "text/plain", **nocache})
+        if sub == "/ack" and request.method == "POST":
+            items = [i for i in await pending() if i["id"] != plot_id]
+            await store.put(PLOTS_PENDING_KEY, json.dumps(items, ensure_ascii=False))
+            await store.delete(PLOT_PREFIX + plot_id)
+            return Response.json({"ok": True, "waiting": len(items)}, headers=nocache)
+        return error("Not found", 404)
 
     async def correction(self, request):
         """GET: 最新の補正データ(なければ 404)。POST: {token, table} を受け取って最新として保存する。"""

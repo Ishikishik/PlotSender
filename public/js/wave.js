@@ -21,6 +21,9 @@
   const POLY = { h: 6, v: 4 };      // 線ごとの多項式の次数(横線は長いので高め)
   const FADE_MM = 10;               // ファームの offsetAt と同じ
   const DEG = Math.PI / 180;
+  // ファームに入っている係数(PlotterConfig.h の WAVE_HARMONIC、WAVE_A_COS など。補正データに係数がないときに使われる)
+  const FIRMWARE_WAVE = { h: [2, 4], a: { cos: [-0.0312, 0.0007], sin: [0.0207, -0.0066] },
+                          b: { cos: [0.0858, -0.0158], sin: [-0.0228, -0.0228] } };
 
   // ---- ファームの offsetAt と同じ(表から「指令に足す量」を補間) ----
   function offsetAt(rec, x, y) {
@@ -181,7 +184,8 @@
     if (!coef) throw new Error("係数を決められなかった");
 
     // 残りの大きさ: 補正なし / 今の係数 / 新しい係数
-    const current = rec.wave || null;
+    // 比べる相手: 補正データの係数。なければファームに入っている係数(PlotterConfig.h の WAVE_*)
+    const current = rec.wave || FIRMWARE_WAVE;
     const rmsOf = model => {
       let s = 0, n = 0;
       for (const { y, X } of kept) for (let i = 0; i < y.length; i++) {
@@ -241,7 +245,7 @@
     const r = fitFromLines(measured, rec, options);
     log(`線の波(線ごとのゆっくりしたずれを除いた残り、RMS):`);
     log(`  補正なし ${r.rmsNone.toFixed(3)} mm`);
-    if (r.rmsCurrent !== null) log(`  今の係数で補正したら ${r.rmsCurrent.toFixed(3)} mm`);
+    if (r.rmsCurrent !== null) log(`  今の係数${rec.wave ? "" : "(ファームの値)"}で補正したら ${r.rmsCurrent.toFixed(3)} mm`);
     log(`  新しい係数で補正したら ${r.rmsNew.toFixed(3)} mm(見込み)`);
     log("新しい係数 [度](実際の角度 = 指令 + Σ cos・cos(2π h θ/7.2) + sin・sin(…)):");
     r.wave.h.forEach((h, k) => log(`  周期 ${(7.2 / h).toFixed(1)} 度: A ${r.wave.a.cos[k].toFixed(4)}, ${r.wave.a.sin[k].toFixed(4)}  B ${r.wave.b.cos[k].toFixed(4)}, ${r.wave.b.sin[k].toFixed(4)}`));
