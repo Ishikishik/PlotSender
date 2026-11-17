@@ -44,6 +44,43 @@ function nameBytes(name) {
   return enc.encode(chars.join(""));
 }
 
+// 腕が届く範囲に絵を収める。紙(機械の座標で y 75〜150)の高さ全部が届く x の範囲を、機械の寸法で IK を解いて求め、
+// 紙の左右に空ける幅(PAPER_OPTIONS.marginLeft / marginRight)にする。寸法は補正データ(/api/correction)の geom
+// (なければ設計値)。補正の表のずれ(1 mm 前後)の分、REACH_SAFETY_MM だけ外側まで届くことを確かめる。
+// 実際の機械では、手前の角(x -63, y 76)に届かず、絵が途中で止まった(設計値の計算では届くはずだった)
+const REACH_SAFETY_MM = 1.5;
+function reachRangeX(geom, height) {
+  const ok = x => {
+    for (let y = SD_PAPER_ORIGIN.y; y <= SD_PAPER_ORIGIN.y + height + 1e-6; y += 0.5) if (!PlotGeometry.ik(geom, x, y)) return false;
+    return true;
+  };
+  const half = -SD_PAPER_ORIGIN.x;
+  let xl = -half, xr = half;
+  while (xl < 0 && !ok(xl - REACH_SAFETY_MM)) xl += 0.5;
+  while (xr > 0 && !ok(xr + REACH_SAFETY_MM)) xr -= 0.5;
+  return [xl, xr];
+}
+async function updateReachMargins() {
+  if (typeof PlotGeometry === "undefined") return;
+  let geom = PlotGeometry.DEFAULT_GEOM, source = "設計値";
+  try {
+    const response = await fetch("/api/correction", { cache: "no-store" });
+    if (response.ok) {
+      const table = await response.json();
+      if (table.geom) { geom = { ...PlotGeometry.DEFAULT_GEOM, ...table.geom }; source = `補正データ No. ${table.id || "?"}`; }
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  const [xl, xr] = reachRangeX(geom, PAPER_OPTIONS.paperHeight);
+  const half = PAPER_OPTIONS.paperWidth / 2;
+  // 紙の座標の x → 機械の x: 180° 回すなら half - x、回さないなら x - half
+  if (SD_ROTATE_180) { PAPER_OPTIONS.marginLeft = half - xr; PAPER_OPTIONS.marginRight = half + xl; }
+  else { PAPER_OPTIONS.marginLeft = half + xl; PAPER_OPTIONS.marginRight = half - xr; }
+  console.log(`腕が届く範囲(${source}): 機械の x ${xl} 〜 ${xr} mm → 紙の左 ${PAPER_OPTIONS.marginLeft} mm、右 ${PAPER_OPTIONS.marginRight} mm を空ける`);
+}
+updateReachMargins();
+
 // 線の描く向きを選ぶ。線は逆向きに描いても同じ形なので、描き始めでモーターが止まりかけ(すぐに回る向きが変わる)に
 // ならない向きを選ぶ。止まりかけの所から描き始めると、ペン先の摩擦で腕がガタの中で引っかかっては外れ、
 // 最初の数 mm がジグザグになる(bt の試し描きで、向きが変わる所まで約 5mm の描き始めで出た。約 9mm では出なかった)

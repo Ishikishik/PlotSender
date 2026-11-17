@@ -114,12 +114,12 @@ const roundMm = value => Math.round(value * 1000) / 1000;
 
 // 結果全体を紙に収まる mm 座標へ変換する。
 // 紙を広く使えるなら、絵を 90° 回して置く(縦長の絵を横長の紙に描くときなど。絵の上が紙の左を向く)。
-// options: { paperWidth, paperHeight, minStrokeMm, marginX }(単位はすべて mm)。marginX: 紙の左右に空ける幅
+// options: { paperWidth, paperHeight, minStrokeMm, marginLeft, marginRight }(単位はすべて mm)。margin*: 紙の左右に空ける幅
 // 戻り値: { data: 保存する JSON の中身, stats: 画面に出す集計 }
 function normalizeForPlotter(result, options) {
   const { paperWidth, paperHeight, minStrokeMm } = options;
-  const marginX = options.marginX || 0;
-  const fitWidth = paperWidth - 2 * marginX;   // 絵を収める幅
+  const marginLeft = options.marginLeft || 0, marginRight = options.marginRight || 0;
+  const fitWidth = paperWidth - marginLeft - marginRight;   // 絵を収める幅
   const kinds = [];
   const joins = [];   // joins[i]: 前の線にペンを上げずにつなぐ(library.js の markJoins)
   const paths = orderedPaths(result, kinds, joins);
@@ -136,7 +136,7 @@ function normalizeForPlotter(result, options) {
   const outHeight = (rotated ? drawWidth : drawHeight) * scale;
 
   // 紙の中央に置く。画像は y が下向きなので反転する
-  const offsetX = (paperWidth - outWidth) / 2;
+  const offsetX = marginLeft + (fitWidth - outWidth) / 2;
   const offsetY = (paperHeight - outHeight) / 2;
   const toMm = rotated
     ? p => [   // 90° 回す: 画像の下向き(y)→ 紙の右、画像の右(x)→ 紙の上

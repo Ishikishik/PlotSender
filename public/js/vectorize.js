@@ -7,9 +7,9 @@ const plotStatus = document.querySelector("#plot-status");
 const downloadPlotButton = document.querySelector("#download-plot");
 // 紙の設定は固定。cutting_machine(パンタグラフ)の描ける範囲 140 × 75 mm に合わせる
 // (firm/src/config/PlotterConfig.h の PAPER_X_MIN〜MAX、PAPER_Y_MIN〜MAX)。この長さより短い線は描かない
-// marginX: 紙の左右 3 mm には描かない。腕が届かない所があるため(機械の座標で x -68 mm より外の、y 75 mm と 150 mm の角。
-// 設計の寸法の IK で調べた。届かない点があると機械は "out of area" で途中で止まる)。中央に置くので左右とも空ける
-const PAPER_OPTIONS = { paperWidth: 140, paperHeight: 75, minStrokeMm: 0.4, marginX: 3 };
+// marginLeft / marginRight: 紙の左右で、腕が届かない所を空ける幅 [mm]。機械の寸法(補正データ)から sdsend.js の
+// updateReachMargins が計算して書き換える(読めるまでは 3 mm ずつ)。届かない点があると、機械はそこを飛ばして描く
+const PAPER_OPTIONS = { paperWidth: 140, paperHeight: 75, minStrokeMm: 0.4, marginLeft: 3, marginRight: 3 };
 const paperStatus = document.querySelector("#paper-status");
 
 const VECTORIZE_MAX_SIZE = 1024;
@@ -135,7 +135,7 @@ async function vectorizeImage(blob) {
     const timer = createTimer();
     const src = cv.imread(imageToCanvas(img));
     // 紙の上での 1 px の大きさ(だいたい。絵は紙に収まる最大の大きさにする)から、ペンの太さを px にする
-    const fitWidth = PAPER_OPTIONS.paperWidth - 2 * PAPER_OPTIONS.marginX;
+    const fitWidth = PAPER_OPTIONS.paperWidth - PAPER_OPTIONS.marginLeft - PAPER_OPTIONS.marginRight;
     const mmPerPx = Math.max(Math.min(fitWidth / src.cols, PAPER_OPTIONS.paperHeight / src.rows),
                              Math.min(fitWidth / src.rows, PAPER_OPTIONS.paperHeight / src.cols));
     const penPx = PEN_WIDTH_MM / mmPerPx;
