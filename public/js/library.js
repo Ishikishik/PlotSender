@@ -1029,7 +1029,7 @@ function buildPlotterPlan(strokes, fills) {
   // 前は 骨格 → 塗り → 中くらい → 細かい の組ごとに並べていたので、交点でつながる線が別の組に分かれ、
   // ほとんどの線でペンを上げ下げしていた。塗り(機械には範囲で渡す)は線のあと
   const ordered = [
-    ...nearestNeighborOrder(items.filter(item => item.type === "stroke")),
+    ...twoOptOrder(nearestNeighborOrder(items.filter(item => item.type === "stroke"))),
     ...nearestNeighborOrder(items.filter(item => item.type !== "stroke"))
   ];
 
@@ -1086,6 +1086,41 @@ function nearestNeighborOrder(items) {
     pen = bestReverse ? next.start : next.end;
   }
 
+  return ordered;
+}
+
+// 近い順に並べた線の順番を、ペンを上げて移動する道のりが短くなるように入れ替える(2-opt)
+// i 本目と j 本目のあいだ(i+1 〜 j)を逆順にし、その線の向きも逆にする。道のりが短くなる限り繰り返す
+// 近い順の並べ方は、最後に遠くへ戻る移動が出やすいので、それを減らす。つながる線(距離 0)はそのまま残りやすい
+function twoOptOrder(ordered, maxMs = 400) {
+  const n = ordered.length;
+  if (n < 4) return ordered;
+  const startOf = item => item.reverse ? item.end : item.start;
+  const endOf = item => item.reverse ? item.start : item.end;
+  const deadline = performance.now() + maxMs;
+  let improved = true;
+  while (improved && performance.now() < deadline) {
+    improved = false;
+    for (let i = 0; i < n - 2; i++) {
+      const ei = endOf(ordered[i]);
+      const si1 = startOf(ordered[i + 1]);
+      const d1 = distance(ei, si1);
+      for (let j = i + 2; j < n; j++) {
+        const ej = endOf(ordered[j]);
+        const next = j + 1 < n ? startOf(ordered[j + 1]) : null;
+        // 入れ替え後: i の終わり → j の終わり(逆向きの j の始まり)、i+1 の始まり(逆向きの i+1 の終わり) → j+1 の始まり
+        const before = d1 + (next ? distance(ej, next) : 0);
+        const after = distance(ei, ej) + (next ? distance(si1, next) : 0);
+        if (after < before - 1e-6) {
+          for (let a = i + 1, b = j; a < b; a++, b--) [ordered[a], ordered[b]] = [ordered[b], ordered[a]];
+          for (let k = i + 1; k <= j; k++) ordered[k].reverse = !ordered[k].reverse;
+          improved = true;
+          break;
+        }
+      }
+      if (performance.now() >= deadline) break;
+    }
+  }
   return ordered;
 }
 
