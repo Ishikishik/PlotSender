@@ -839,8 +839,10 @@ function removeFrameSolids(bin, settings) {
     const edge = Math.max(2, Math.round(0.01 * Math.min(bin.cols, bin.rows)));   // 端から 1% 以内は端とみなす
     const touches = left <= edge || top <= edge || left + width >= bin.cols - edge || top + height >= bin.rows - edge;
     // 端の帯は四角くべったり(外接する四角の半分以上が黒)。端まで続く太い線は細長く斜めなので、四角の中はほとんど白
+    // 消すのは、べったり黒い塊だけ(外接する四角の半分以上が黒)。太い線がつながった輪郭は、大きくても四角の中はほとんど白
+    // (前は大きさだけで決めていて、線の太い絵で輪郭が丸ごと消えた)
     const slab = area / Math.max(1, width * height) >= 0.5 && Math.min(width, height) >= settings.fillMinMaxWidth;
-    if (area >= settings.fillMinArea && ((touches && slab) || area > maxArea)) { drop[label] = true; dropped++; }
+    if (area >= settings.fillMinArea && slab && (touches || area > maxArea)) { drop[label] = true; dropped++; }
   }
   if (dropped > 0) {
     const mask = cv.Mat.zeros(bin.rows, bin.cols, cv.CV_8UC1);
