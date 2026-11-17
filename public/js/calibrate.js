@@ -336,8 +336,16 @@
       for (let v = Math.max(0, v0); v <= Math.min(mask.h - 1, v1); v++)
         for (let u = Math.max(0, u0); u <= Math.min(mask.w - 1, u1); u++) rest[v * mask.w + u] = 0;
     };
-    for (const tr of hTracks) for (const [t, c] of tr) clear(Math.round(t - A), Math.round(t + A), Math.round(c - R), Math.round(c + R));
-    for (const tr of vTracks) for (const [t, c] of tr) clear(Math.round(c - R), Math.round(c + R), Math.round(t - A), Math.round(t + A));
+    // たどった点そのものではなく、線全体に当てはめた滑らかな曲線のまわりを消す
+    // (線の近くに丸があると、たどる処理が丸の上へ乗り移ることがあり、点ごとに消すと丸まで消えた)
+    const smooth = tr => {
+      const fit = polyfit(tr.map(p => p[0]), tr.map(p => p[1]), 3);
+      const t0 = tr[0][0], t1 = tr[tr.length - 1][0], out = [];
+      for (let t = t0; t <= t1; t += 2 * A) out.push([t, polyval(fit, t)]);
+      return out;
+    };
+    for (const tr of hTracks) for (const [t, c] of smooth(tr)) clear(Math.round(t - A), Math.round(t + A), Math.round(c - R), Math.round(c + R));
+    for (const tr of vTracks) for (const [t, c] of smooth(tr)) clear(Math.round(c - R), Math.round(c + R), Math.round(t - A), Math.round(t + A));
 
     // 見つけた塊のうち、丸(中が空いた輪)らしいものを集める
     // 実際に描かれた丸は、ガタで横長の楕円になったり、切れ目のある C の形になったりする(4 x 2.7mm ほど)。
@@ -661,6 +669,19 @@
     const marks = findMarks(mask, hTracks, vTracks, toPx, toMm);
     log(`丸: ${marks.length} / ${MARKS.length} 個` + (marks.length ? "(" + marks.map(m =>
       `(${m.mark[0]}, ${m.mark[1]}) のずれ ${(m.at[0] - m.mark[0]).toFixed(1)}, ${(m.at[1] - m.mark[1]).toFixed(1)} mm`).join("、") + ")" : ""));
+    // 寸法の逆算に使うとき: 番号を付けずに、見つかった線どうしの交点を全部返す
+    // (番号は geometry.js が、寸法の予測と重ねて決める。丸や線の端に頼らない)
+    if (options.measureOnly) {
+      const byY = tr => median(tr.map(p => p[1]));
+      const hs = [...hTracks].sort((a, b) => byY(a) - byY(b)), vs = [...vTracks].sort((a, b) => byY(a) - byY(b));
+      const all = intersections(new Map(hs.map((t, i) => [i, t])), new Map(vs.map((t, i) => [i, t])), hs.length, vs.length);
+      const points = [...all.values()].map(k => toMm(...k.q));
+      log(`線: 横 ${hs.length} 本、縦 ${vs.length} 本、交点 ${points.length} 個(番号は付けない)`);
+      const debug = top;
+      for (const k of all.values()) cv.circle(debug, new cv.Point(Math.round(k.q[0]), Math.round(k.q[1])), 6, new cv.Scalar(255, 0, 0), 2);
+      return { points, grid: { xs, ys }, marks: marks.map(m => ({ mark: m.mark, at: m.at })), log: lines, debug,
+               toPx: (x, y) => toPx(x, y) };
+    }
     let markCandidate = null;
     if (marks.length) {
       const hByMark = indexFromMarks(hInMm, ys, marks, p => p[0], p => p[1]);
@@ -713,6 +734,7 @@
     const keys = [...best.cross.values()].sort((a, b) => a.i - b.i || a.j - b.j);
     const nominal = keys.map(k => [xs[k.j], ys[k.i]]);
     let measured = keys.map(k => toMm(...k.q));
+
     const raw = measured.map((m, n) => Math.hypot(m[0] - nominal[n][0], m[1] - nominal[n][1]));
     log(`ずれ: 平均 ${mean(raw).toFixed(2)} mm、最大 ${Math.max(...raw).toFixed(2)} mm`);
     const rigid = removeRigid(measured, nominal);

@@ -48,6 +48,11 @@ def base36(n: int) -> str:
             return out
 
 
+# 機構の寸法の項目と、受け付ける値の上限(長さ [mm]、角度 [度]、平行移動 [mm])。firm/src/motion/Geometry.h と同じ並び
+GEOM_LIMITS = {"d": 300.0, "l1a": 300.0, "l1b": 300.0, "l2a": 300.0, "l2b": 300.0, "e": 300.0,
+               "offA": 30.0, "offB": 30.0, "tx": 50.0, "ty": 50.0, "rot": 20.0}
+
+
 def check_table(t: dict) -> dict:
     """ページから届いた補正データを確かめて、必要な項目だけの dict にする。おかしければ ValueError"""
     def number(v, limit=1000.0):
@@ -65,12 +70,20 @@ def check_table(t: dict) -> dict:
     xy, yx = [number(v, 10) for v in d["xy"]], [number(v, 10) for v in d["yx"]]
     if len(xy) != 3 or len(yx) != 3:
         raise ValueError("向きの係数の数")
-    return {
+    out = {
         "nx": nx, "ny": ny, "x0": number(t["x0"]), "y0": number(t["y0"]), "step": number(t["step"]),
         "dx": dx, "dy": dy,
         "dir": {"cx": number(d["cx"]), "sx": number(d["sx"]), "cy": number(d["cy"]), "sy": number(d["sy"]), "xy": xy, "yx": yx},
         "mode": str(t.get("mode", ""))[:20],
     }
+    # 機構の寸法(写真から逆算したもの)。無いときは、機械はファームの設計値を使う
+    if t.get("geom") is not None:
+        g = t["geom"]
+        out["geom"] = {k: number(g[k], limit) for k, limit in GEOM_LIMITS.items()}
+        for k in ("d", "l1a", "l1b", "l2a", "l2b", "e"):
+            if out["geom"][k] <= 0:
+                raise ValueError(f"長さが 0 以下: {k}")
+    return out
 
 
 class Default(WorkerEntrypoint):
