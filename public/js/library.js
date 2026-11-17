@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   emulatorStepPx: 1.2,
   fillEnabled: true,
   fillMinArea: 100,
+  fillCoreWidth: 8,
   fillMinMaxWidth: 12,
   fillMinDensity: 0.20,
   fillHatchSpacing: 4,
@@ -69,6 +70,7 @@ const SETTING_INFO = {
   emulatorStepPx:           { group: "プレビュー", label: "プロッタ再現の刻み（px, 小さいほど精密で遅い）", min: 0.2, step: 0.1 },
   fillEnabled:              { group: "塗りつぶし", label: "塗りつぶし処理を行う" },
   fillMinArea:              { group: "塗りつぶし", label: "塗り候補の最小面積（px²）", min: 0, step: 10 },
+  fillCoreWidth:            { group: "塗りつぶし", label: "塗りとみなす太さ（px。これより細い線は塗りから外す）", min: 2, step: 1 },
   fillMinMaxWidth:          { group: "塗りつぶし", label: "塗り候補の最小の最大太さ（px）", min: 0, step: 1 },
   fillMinDensity:           { group: "塗りつぶし", label: "外接矩形に対する黒の割合の下限", min: 0, max: 1, step: 0.01 },
   fillHatchSpacing:         { group: "塗りつぶし", label: "ハッチングの間隔（px）", min: 1, step: 1 },
@@ -716,11 +718,25 @@ function lineStrokeToBezier(p0, p1, width) {
 /* 塗りつぶし                                                          */
 /* ------------------------------------------------------------------ */
 
+// 黒い部分から、fillCoreWidth より太いところ(塗り)だけを取り出す(オープニング: 細らせてから太らせる)。
+// 線画では、塗り(瞳など)が線とつながって 1 つの大きな塊になるので、塊のまま調べると
+// 「外接矩形に対する黒の割合」が小さくなって塗りにならなかった。細い線を外してから塊に分ける
+function solidRegions(bin, coreWidth) {
+  const size = Math.max(3, Math.round(coreWidth) | 1);   // 奇数
+  const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(size, size));
+  const solid = new cv.Mat();
+  cv.morphologyEx(bin, solid, cv.MORPH_OPEN, kernel);
+  kernel.delete();
+  return solid;
+}
+
 function extractFillRegions(bin, dist, settings) {
+  const solid = solidRegions(bin, settings.fillCoreWidth);
   const labels = new cv.Mat();
   const stats = new cv.Mat();
   const centroids = new cv.Mat();
-  const count = cv.connectedComponentsWithStats(bin, labels, stats, centroids, 8, cv.CV_32S);
+  const count = cv.connectedComponentsWithStats(solid, labels, stats, centroids, 8, cv.CV_32S);
+  solid.delete();
   const fills = [];
 
   for (let label = 1; label < count; label++) {
@@ -739,14 +755,20 @@ function extractFillRegions(bin, dist, settings) {
     const delicate = isDelicateFill(area, width, height, metrics, settings);
     const mask = componentMask(labels, label);
     const contours = contourBeziersForMask(mask, settings.bezierEpsilon);
-    const fillStrokes = delicate
+    let fillStrokes = delicate
       ? skeletonFillComponent(mask, dist, settings)
       : hatchFillComponent(labels, dist, label, left, top, width, height, metrics.avgWidth, delicate, settings);
+    // 小さな丸い塗り(瞳の点など)は骨格がほとんど点になって線が残らないので、そのときはハッチングで塗る
+    let mode = delicate ? "skeleton-brush" : "hatch";
+    if (delicate && fillStrokes.length === 0) {
+      mode = "hatch";
+      fillStrokes = hatchFillComponent(labels, dist, label, left, top, width, height, metrics.avgWidth, delicate, settings);
+    }
 
     if (contours.length > 0 && fillStrokes.length > 0) {
       fills.push({
         id: label,
-        mode: delicate ? "skeleton-brush" : "hatch",
+        mode,
         area,
         bbox: { x: left, y: top, width, height },
         density: round(density),
