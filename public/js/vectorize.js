@@ -10,7 +10,10 @@ const downloadPlotButton = document.querySelector("#download-plot");
 const PAPER_OPTIONS = { paperWidth: 140, paperHeight: 75, minStrokeMm: 0.4 };
 const paperStatus = document.querySelector("#paper-status");
 
-const VECTORIZE_MAX_SIZE = 1024;   // これより大きい画像は縮小してから処理する
+const VECTORIZE_MAX_SIZE = 1024;
+// ペンの線の太さ [mm]。プレビューはこの太さで描く(元の画像の線の太さではなく、実際に紙に出る太さ)。
+// これの 2 倍より太い黒い所は、線 1 本では埋まらないので塗りにする
+const PEN_WIDTH_MM = 0.3;   // これより大きい画像は縮小してから処理する
 let openCvPromise = null;
 let plotterResult = null;          // 最後に作ったストロークのデータ（ESP32 へ送るときに使う）
 
@@ -73,6 +76,47 @@ function waitForPaint() {
   return new Promise(resolve => requestAnimationFrame(() => setTimeout(resolve, 0)));
 }
 
+// 機械で描いたときの見た目: 線はペンの太さで、塗りは範囲(外側と穴)を塗りつぶす → RGBA の cv.Mat
+// (前は元の画像の線の太さで描いていたので、太い線や瞳が塗れているように見えたが、機械は細い線 1 本しか描かない)
+function drawPenPreview(rows, cols, result, penPx) {
+  const out = new cv.Mat(rows, cols, cv.CV_8UC4, new cv.Scalar(255, 255, 255, 255));
+  const ink = new cv.Scalar(0, 0, 0, 255);
+  const thickness = Math.max(1, Math.round(penPx));
+  const toPoints = (curves) => {
+    const pts = [];
+    for (const c of curves) for (let i = 0; i < 6; i++) {
+      const p = cubicPoint(c, i / 6);
+      pts.push(Math.round(p.x), Math.round(p.y));
+    }
+    const last = curves[curves.length - 1].p1;
+    pts.push(Math.round(last.x), Math.round(last.y));
+    return pts;
+  };
+  // 塗り(偶奇規則: 穴は白のまま)
+  for (const fill of result.fills || []) {
+    const rings = new cv.MatVector();
+    for (const contour of fill.contours || []) {
+      if (contour.center.length === 0) continue;
+      const m = cv.matFromArray(contour.center.length * 6 + 1, 1, cv.CV_32SC2, toPoints(contour.center));
+      rings.push_back(m);
+      m.delete();
+    }
+    if (rings.size() > 0) cv.fillPoly(out, rings, ink, cv.LINE_8);
+    rings.delete();
+  }
+  // 線(塗りのハッチングは機械が描かないので除く)
+  for (const stroke of result.strokes) {
+    if (!stroke.center || stroke.center.length === 0) continue;
+    const m = cv.matFromArray(stroke.center.length * 6 + 1, 1, cv.CV_32SC2, toPoints(stroke.center));
+    const v = new cv.MatVector();
+    v.push_back(m);
+    cv.polylines(out, v, false, ink, thickness, cv.LINE_AA);
+    v.delete();
+    m.delete();
+  }
+  return out;
+}
+
 // photo.js から呼ばれる。AI の結果画像（Blob）を受け取ってベクター化する。
 async function vectorizeImage(blob) {
   plotterResult = null;
@@ -88,18 +132,23 @@ async function vectorizeImage(blob) {
     const settings = { ...DEFAULT_SETTINGS };
     const timer = createTimer();
     const src = cv.imread(imageToCanvas(img));
+    // 紙の上での 1 px の大きさ(だいたい。絵は紙に収まる最大の大きさにする)から、ペンの太さを px にする
+    const mmPerPx = Math.max(Math.min(PAPER_OPTIONS.paperWidth / src.cols, PAPER_OPTIONS.paperHeight / src.rows),
+                             Math.min(PAPER_OPTIONS.paperWidth / src.rows, PAPER_OPTIONS.paperHeight / src.cols));
+    const penPx = PEN_WIDTH_MM / mmPerPx;
+    settings.fillCoreWidth = Math.max(3, Math.round(penPx * 2));
+    settings.fillMinMaxWidth = settings.fillCoreWidth;
+    settings.fillMinArea = Math.max(20, Math.round(settings.fillCoreWidth * settings.fillCoreWidth));
     let output = null;
 
     try {
       output = runPipeline(src, settings, timer);
       const { result, mats } = output;
 
-      // 実際にプロッタで描いたときの見た目を表示する
-      const plotted = drawPlotterMask(src.rows, src.cols, result.strokes, result.fills, mats.cleaned, settings.emulatorStepPx);
-      const view = maskToRgba(plotted);
+      // 実際にプロッタで描いたときの見た目を表示する(線はペンの太さ、塗りは機械が塗る範囲をそのまま黒く)
+      const view = drawPenPreview(src.rows, src.cols, result, penPx);
       cv.imshow(plotPreview, view);
       view.delete();
-      plotted.delete();
 
       plotterResult = result;
       plotPreview.hidden = false;
@@ -128,7 +177,7 @@ function updatePaperSummary() {
   } else {
     const { stats } = normalizeForPlotter(plotterResult, options);
     paperStatus.textContent =
-      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm${stats.rotated ? "（紙を広く使うため 90° 回して置く）" : ""}・線 ${stats.strokes} 本` +
+      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm${stats.rotated ? "（紙を広く使うため 90° 回して置く）" : ""}・線 ${stats.strokes} 本・塗り ${stats.fills} 個（塗り方は機械が決める）` +
       `（短い線 ${stats.removed} 本を削除）・描く長さ ${(stats.drawMm / 1000).toFixed(2)} m`;
   }
 }

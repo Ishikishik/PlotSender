@@ -7,6 +7,8 @@
 //   "BEZ2"(4)、線の数 u16、印 u8(bit0 = 星。星の絵は機械が古くなっても消さない)、名前のバイト数 u8、
 //   作った時刻 u32(Unix 秒。機械は古いものから消す)、UUID 16 バイト(番号。機械のファイル名になる)、名前(UTF-8)、
 //   線ごとに: 区間の数 u16、始点 int16 x, y、区間ごとに int16 × 6(制御点1、制御点2、終点)
+//   印の bit1 が立っていれば、線のあとに塗り: 塗りの数 u16、塗りごとに 輪の数 u8、輪ごとに 点の数 u16、点 int16 x, y …
+//     (閉じた輪。外側と穴。機械が外から内へ同心の輪で塗る。firm/src/jobs/Fill.h)
 //   座標の単位は 0.01 mm。機械の座標(紙の左下が PAPER_X_MIN, PAPER_Y_MIN)
 //
 // 名前は同じでもよい(番号で区別する)。
@@ -49,6 +51,9 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
     return r;
   };
   const strokes = data.strokes.filter(s => s.length > 0);
+  // 塗り: 輪は 255 個まで、点は 1 輪 65535 個まで。機械は 1 つの塗りで 4000 点・32 輪までしか使わない
+  const fills = (data.fills || []).map(rings => rings.slice(0, 32).filter(r => r.length >= 6))
+    .filter(rings => rings.length > 0).slice(0, 65535);
   if (strokes.length > 65535) throw new Error("線が多すぎます");
   const nb = nameBytes(name);
   let size = 28 + nb.length;
@@ -56,12 +61,19 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
     if (s.length > 65535) throw new Error("線が長すぎます");
     size += 6 + 12 * s.length;
   }
+  if (fills.length > 0) {
+    size += 2;
+    for (const rings of fills) {
+      size += 1;
+      for (const r of rings) size += 2 + 2 * r.length;   // r は [x0, y0, x1, y1, …]
+    }
+  }
   const buf = new ArrayBuffer(size);
   const v = new DataView(buf);
   const u8 = new Uint8Array(buf);
   u8.set([0x42, 0x45, 0x5a, 0x32], 0);   // "BEZ2"
   v.setUint16(4, strokes.length, true);
-  v.setUint8(6, starred ? 1 : 0);
+  v.setUint8(6, (starred ? 1 : 0) | (fills.length > 0 ? 2 : 0));
   v.setUint8(7, nb.length);
   v.setUint32(8, createdAt, true);
   u8.set(uuid, 12);
@@ -84,6 +96,24 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
       }
     }
   }
+  if (fills.length > 0) {
+    v.setUint16(o, fills.length, true);
+    o += 2;
+    for (const rings of fills) {
+      v.setUint8(o, rings.length);
+      o += 1;
+      for (const r of rings) {
+        v.setUint16(o, r.length / 2, true);
+        o += 2;
+        for (let k = 0; k < r.length; k += 2) {
+          v.setInt16(o, X(r[k]), true);
+          v.setInt16(o + 2, Y(r[k + 1]), true);
+          o += 4;
+        }
+      }
+    }
+  }
+  if (o !== size) throw new Error("BEZ2 の大きさが合いません");
   return u8;
 }
 

@@ -5,8 +5,11 @@
 //     "unit": "mm",
 //     "origin": "paper-bottom-left",
 //     "paper": { "width": 91, "height": 55 },
-//     "strokes": [ [ [x0, y0, cx1, cy1, cx2, cy2, x1, y1], ... ], ... ]
+//     "strokes": [ [ [x0, y0, cx1, cy1, cx2, cy2, x1, y1], ... ], ... ],
+//     "fills": [ [ [x0, y0, x1, y1, ...], ... ], ... ]   // 塗り: 塗りごとに閉じた輪(外側と穴)の点列
 //   }
+// 塗りはハッチングの線ではなく範囲(輪郭)で渡し、塗り方は機械が決める(firm/src/jobs/Fill.h)。
+// そのため strokes には塗りのハッチングの線を入れない(ページのプレビューはハッチングのまま)
 // 原点は紙の左下、x は右、y は上。紙を置く位置は ESP32 の PlotterConfig.h で足す。
 
 // 制御点の長さの上限(ベジェ 1 本の両端の距離に対する比)。
@@ -64,8 +67,8 @@ function polylineLength(points) {
   return length;
 }
 
-// drawOrder の順に、向きをそろえたベジェ曲線の配列を作る。
-function orderedPaths(result) {
+// drawOrder の順に、向きをそろえたベジェ曲線の配列を作る。kinds[i] は "stroke" か "fillStroke"
+function orderedPaths(result, kinds = []) {
   const paths = [];
   for (const command of result.drawOrder) {
     const stroke = strokeForCommand(result, command);
@@ -74,8 +77,22 @@ function orderedPaths(result) {
     paths.push(command.reverse
       ? curves.slice().reverse().map(c => ({ p0: c.p1, c1: c.c2, c2: c.c1, p1: c.p0 }))
       : curves);
+    kinds.push(command.type);
   }
   return paths;
+}
+
+const FILL_RING_SAMPLES = 6;   // 輪郭のベジェ 1 本あたりの点の数
+
+// 塗り 1 つの輪郭(外側と穴)を点列にする → [[{x, y}, ...], ...](画像の座標)
+function fillRings(fill) {
+  return (fill.contours || []).map(contour => {
+    const points = [];
+    for (const curve of contour.center) {
+      for (let i = 0; i < FILL_RING_SAMPLES; i++) points.push(cubicPoint(curve, i / FILL_RING_SAMPLES));
+    }
+    return points;
+  }).filter(points => points.length >= 3);
 }
 
 // 点列の範囲を返す。
@@ -100,7 +117,8 @@ const roundMm = value => Math.round(value * 1000) / 1000;
 // 戻り値: { data: 保存する JSON の中身, stats: 画面に出す集計 }
 function normalizeForPlotter(result, options) {
   const { paperWidth, paperHeight, minStrokeMm } = options;
-  const paths = orderedPaths(result);
+  const kinds = [];
+  const paths = orderedPaths(result, kinds);
   const sampled = paths.map(samplePath);
   const bounds = pointBounds(sampled);
   const drawWidth = bounds.maxX - bounds.minX;
@@ -130,6 +148,7 @@ function normalizeForPlotter(result, options) {
   let removed = 0;
   let drawMm = 0;
   for (let i = 0; i < paths.length; i++) {
+    if (kinds[i] === "fillStroke") continue;   // 塗りは範囲で渡す(下)
     const lengthMm = polylineLength(sampled[i]) * scale;
     if (lengthMm < minStrokeMm) {
       removed++;
@@ -139,12 +158,16 @@ function normalizeForPlotter(result, options) {
     strokes.push(paths[i].map(c => [...toMm(c.p0), ...toMm(c.c1), ...toMm(c.c2), ...toMm(c.p1)]));
   }
 
+  const fills = (result.fills || []).map(fill => fillRings(fill).map(points => points.flatMap(toMm)))
+    .filter(rings => rings.length > 0);
+
   return {
     data: {
       unit: "mm",
       origin: "paper-bottom-left",
       paper: { width: paperWidth, height: paperHeight },
-      strokes
+      strokes,
+      fills
     },
     stats: {
       scale,
@@ -152,6 +175,7 @@ function normalizeForPlotter(result, options) {
       width: outWidth,
       height: outHeight,
       strokes: strokes.length,
+      fills: fills.length,
       removed,
       drawMm
     }
