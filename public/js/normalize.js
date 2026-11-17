@@ -68,7 +68,7 @@ function polylineLength(points) {
 }
 
 // drawOrder の順に、向きをそろえたベジェ曲線の配列を作る。kinds[i] は "stroke" か "fillStroke"
-function orderedPaths(result, kinds = []) {
+function orderedPaths(result, kinds = [], joins = []) {
   const paths = [];
   for (const command of result.drawOrder) {
     const stroke = strokeForCommand(result, command);
@@ -78,6 +78,7 @@ function orderedPaths(result, kinds = []) {
       ? curves.slice().reverse().map(c => ({ p0: c.p1, c1: c.c2, c2: c.c1, p1: c.p0 }))
       : curves);
     kinds.push(command.type);
+    joins.push(!!command.joinPrev);
   }
   return paths;
 }
@@ -118,7 +119,8 @@ const roundMm = value => Math.round(value * 1000) / 1000;
 function normalizeForPlotter(result, options) {
   const { paperWidth, paperHeight, minStrokeMm } = options;
   const kinds = [];
-  const paths = orderedPaths(result, kinds);
+  const joins = [];   // joins[i]: 前の線にペンを上げずにつなぐ(library.js の markJoins)
+  const paths = orderedPaths(result, kinds, joins);
   const sampled = paths.map(samplePath);
   const bounds = pointBounds(sampled);
   const drawWidth = bounds.maxX - bounds.minX;
@@ -147,15 +149,33 @@ function normalizeForPlotter(result, options) {
   const strokes = [];
   let removed = 0;
   let drawMm = 0;
+  let lastKept = -1;   // 最後に strokes に入れた線の番号(つなぐ相手)
+  let joined = 0;
+  const toCurve = c => [...toMm(c.p0), ...toMm(c.c1), ...toMm(c.c2), ...toMm(c.p1)];
   for (let i = 0; i < paths.length; i++) {
     if (kinds[i] === "fillStroke") continue;   // 塗りは範囲で渡す(下)
     const lengthMm = polylineLength(sampled[i]) * scale;
-    if (lengthMm < minStrokeMm) {
+    const join = joins[i] && lastKept === i - 1 && strokes.length > 0;
+    if (!join && lengthMm < minStrokeMm) {
       removed++;
       continue;
     }
     drawMm += lengthMm;
-    strokes.push(paths[i].map(c => [...toMm(c.p0), ...toMm(c.c1), ...toMm(c.c2), ...toMm(c.p1)]));
+    if (join) {
+      // 前の線の終わりから、この線の始まりへ直線でつなぎ、続けて描く(間は元の画像で黒いところ)
+      const prev = strokes[strokes.length - 1];
+      const a = prev[prev.length - 1], b = toMm(paths[i][0].p0);
+      const ax = a[6], ay = a[7];
+      if (Math.hypot(b[0] - ax, b[1] - ay) > 1e-6) {
+        prev.push([ax, ay, ax + (b[0] - ax) / 3, ay + (b[1] - ay) / 3, ax + (b[0] - ax) * 2 / 3, ay + (b[1] - ay) * 2 / 3, b[0], b[1]]
+          .map(roundMm));
+      }
+      prev.push(...paths[i].map(toCurve));
+      joined++;
+    } else {
+      strokes.push(paths[i].map(toCurve));
+    }
+    lastKept = i;
   }
 
   const fills = (result.fills || []).map(fill => fillRings(fill).map(points => points.flatMap(toMm)))
@@ -176,6 +196,7 @@ function normalizeForPlotter(result, options) {
       height: outHeight,
       strokes: strokes.length,
       fills: fills.length,
+      joined,
       removed,
       drawMm
     }

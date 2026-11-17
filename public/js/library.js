@@ -34,6 +34,7 @@ const DEFAULT_SETTINGS = {
   bezierEpsilon: 2.8,
   widthSmoothRadius: 4,
   emulatorStepPx: 1.2,
+  joinMaxPx: 12,             // 前の線の終わりから次の線の始まりまでがこれ以内で、間が黒ければペンを上げずにつなぐ(px)
   fillEnabled: true,
   fillMinArea: 100,
   fillCoreWidth: 8,
@@ -191,6 +192,7 @@ function runPipeline(src, settings, timer = createTimer()) {
   const fills = t("塗りつぶし抽出", () =>
     settings.fillEnabled ? extractFillRegions(cleaned, dist, settings) : []);
   const drawOrder = t("描画順", () => buildPlotterPlan(strokes, fills));
+  t("線をつなぐ", () => markJoins(drawOrder, strokes, cleaned, settings.joinMaxPx));
 
   const result = {
     image: { width: src.cols, height: src.rows },
@@ -486,6 +488,44 @@ function lineSupport(bin, x0, y0, x1, y1) {
   }
 
   return total === 0 ? 0 : hit / total;
+}
+
+// 2 点のあいだを結ぶ直線が、ずっと元の画像の黒(線の上)を通るか(各点の 3×3 のどこかが黒ならよい)
+function bridgeOnInk(bin, a, b) {
+  const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y)));
+  for (let i = 0; i <= steps; i++) {
+    const x = Math.round(a.x + (b.x - a.x) * i / steps);
+    const y = Math.round(a.y + (b.y - a.y) * i / steps);
+    let ink = false;
+    for (let yy = -1; yy <= 1 && !ink; yy++) {
+      for (let xx = -1; xx <= 1 && !ink; xx++) {
+        if (inBounds(bin, x + xx, y + yy) && isWhite(bin, x + xx, y + yy)) ink = true;
+      }
+    }
+    if (!ink) return false;
+  }
+  return true;
+}
+
+// 描画順で続く線のうち、前の線の終わりから次の線の始まりまでが近く(maxPx 以内)、その間が元の画像の黒の上なら
+// command.joinPrev = true にする。normalizeForPlotter が 1 本の線にまとめ、機械はペンを上げずに描く
+// (交点で分かれた線どうしは、たいてい数 px 離れていて、機械の「0.3 mm 以内ならつなぐ」では届かなかった)
+function markJoins(drawOrder, strokes, bin, maxPx) {
+  let prevEnd = null;
+  let joins = 0;
+  for (const command of drawOrder) {
+    if (command.type !== "stroke") { prevEnd = null; continue; }
+    const stroke = strokes[command.strokeIndex];
+    if (!stroke || stroke.center.length === 0) continue;
+    const first = stroke.center[0].p0, last = stroke.center[stroke.center.length - 1].p1;
+    const start = command.reverse ? last : first;
+    const end = command.reverse ? first : last;
+    command.joinPrev = prevEnd !== null && Math.hypot(start.x - prevEnd.x, start.y - prevEnd.y) <= maxPx &&
+      bridgeOnInk(bin, prevEnd, start);
+    if (command.joinPrev) joins++;
+    prevEnd = end;
+  }
+  return joins;
 }
 
 /* ------------------------------------------------------------------ */
@@ -985,13 +1025,13 @@ function buildPlotterPlan(strokes, fills) {
     }
   }
 
-  // 太く長い骨格 → 塗り → 中くらいの線 → 細かいもの の順に描く
-  const groups = ["structure", "fill", "detail", "delicate"];
-  const ordered = [];
-
-  for (const group of groups) {
-    ordered.push(...nearestNeighborOrder(items.filter(item => item.group === group)));
-  }
+  // 線は太さで分けずに、まとめて近い順に並べる(交点でつながる線が続けて並び、機械がペンを上げずにつなげる)。
+  // 前は 骨格 → 塗り → 中くらい → 細かい の組ごとに並べていたので、交点でつながる線が別の組に分かれ、
+  // ほとんどの線でペンを上げ下げしていた。塗り(機械には範囲で渡す)は線のあと
+  const ordered = [
+    ...nearestNeighborOrder(items.filter(item => item.type === "stroke")),
+    ...nearestNeighborOrder(items.filter(item => item.type !== "stroke"))
+  ];
 
   return ordered.map((item, order) => ({
     order,
@@ -1002,7 +1042,8 @@ function buildPlotterPlan(strokes, fills) {
     strokeIndex: item.strokeIndex,
     fillId: item.fillId,
     fillIndex: item.fillIndex,
-    mode: item.mode
+    mode: item.mode,
+    joinPrev: false
   }));
 }
 

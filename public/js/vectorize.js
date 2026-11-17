@@ -136,9 +136,14 @@ async function vectorizeImage(blob) {
     const mmPerPx = Math.max(Math.min(PAPER_OPTIONS.paperWidth / src.cols, PAPER_OPTIONS.paperHeight / src.rows),
                              Math.min(PAPER_OPTIONS.paperWidth / src.rows, PAPER_OPTIONS.paperHeight / src.cols));
     const penPx = PEN_WIDTH_MM / mmPerPx;
+    // 塗りにするのは、ペン 2 本分より太いところのうち、塊として大きいものだけ。
+    // 線の交わる所や端の小さな太り(ペン 3.5 本分に届かない、または 4 本分四方より小さい)は線のままにする
+    // (前はペン 2 本分で判定していて、交点ごとに小さな塗りが入り、線の途中に黒い点が並んだ)
     settings.fillCoreWidth = Math.max(3, Math.round(penPx * 2));
-    settings.fillMinMaxWidth = settings.fillCoreWidth;
-    settings.fillMinArea = Math.max(20, Math.round(settings.fillCoreWidth * settings.fillCoreWidth));
+    settings.fillMinMaxWidth = Math.max(settings.fillCoreWidth + 2, Math.round(penPx * 3.5));
+    settings.fillMinArea = Math.max(40, Math.round((penPx * 4) ** 2));
+    // 1.5 mm 以内で、間が元の画像の黒なら、ペンを上げずにつなぐ(交点で分かれた線どうし)
+    settings.joinMaxPx = Math.max(2, Math.round(1.5 / mmPerPx));
     let output = null;
 
     try {
@@ -177,7 +182,7 @@ function updatePaperSummary() {
   } else {
     const { stats } = normalizeForPlotter(plotterResult, options);
     paperStatus.textContent =
-      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm${stats.rotated ? "（紙を広く使うため 90° 回して置く）" : ""}・線 ${stats.strokes} 本・塗り ${stats.fills} 個（塗り方は機械が決める）` +
+      `出力 ${stats.width.toFixed(1)} × ${stats.height.toFixed(1)} mm${stats.rotated ? "（紙を広く使うため 90° 回して置く）" : ""}・線 ${stats.strokes} 本・塗り ${stats.fills} 個（塗り方は機械が決める）・ペンを上げずにつなぐ所 ${stats.joined} か所` +
       `（短い線 ${stats.removed} 本を削除）・描く長さ ${(stats.drawMm / 1000).toFixed(2)} m`;
   }
 }
