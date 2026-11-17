@@ -12,6 +12,8 @@
 // 名前は同じでもよい(番号で区別する)。
 
 const SD_PAPER_ORIGIN = { x: -70, y: 75 };   // firm/src/config/PlotterConfig.h の PAPER_X_MIN, PAPER_Y_MIN
+// 機械では紙を 180° 回して描くのが標準(機械の前に立って見たときに、ページのプレビューと同じ向きになる)
+const SD_ROTATE_180 = true;
 const SD_NAME_MAX_CHARS = 40;
 const SD_NAME_MAX_BYTES = 120;
 
@@ -65,8 +67,10 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
   u8.set(uuid, 12);
   u8.set(nb, 28);
   let o = 28 + nb.length;
-  const X = (x) => q(x + SD_PAPER_ORIGIN.x);
-  const Y = (y) => q(y + SD_PAPER_ORIGIN.y);
+  // 紙の左下が原点の座標 → 機械の座標。180° 回すときは、紙の中心を軸に回す
+  const W = data.paper.width, H = data.paper.height;
+  const X = (x) => q((SD_ROTATE_180 ? W - x : x) + SD_PAPER_ORIGIN.x);
+  const Y = (y) => q((SD_ROTATE_180 ? H - y : y) + SD_PAPER_ORIGIN.y);
   for (const s of strokes) {
     v.setUint16(o, s.length, true);
     v.setInt16(o + 2, X(s[0][0]), true);
@@ -99,11 +103,13 @@ function plotSendToken() {
 function updateSendPlotButton() {
   const ready = typeof plotterResult !== "undefined" && plotterResult;
   sendPlotButton.disabled = sdSending || !ready || !plotNameInput.value.trim() || !plotSendToken();
-  if (!sdSending && ready && !plotSendToken()) {
+  // 送った結果(送りました/送れませんでした)は、名前を変えるまで残す
+  if (sdSending || sendPlotStatus.dataset.keep === "1") return;
+  if (ready && !plotSendToken()) {
     sendPlotStatus.textContent = "送るには ESP32 と接続するか、機械の QR を読み取ってください";
-  } else if (!sdSending && ready && !plotNameInput.value.trim()) {
+  } else if (ready && !plotNameInput.value.trim()) {
     sendPlotStatus.textContent = "名前を入れてください";
-  } else if (!sdSending && sendPlotStatus.dataset.keep !== "1") {
+  } else {
     sendPlotStatus.textContent = "";
   }
 }
