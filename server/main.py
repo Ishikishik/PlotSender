@@ -48,6 +48,9 @@ PLOTS_PENDING_KEY = "plots:pending"        # まだ機械が取りに来てい�
 PLOT_PREFIX = "plot:"                      # 絵のデータ(base64)。番号は UUID
 PLOT_KEEP_SEC = 30 * 24 * 3600             # 取りに来なかった絵を預かる期間
 PLOT_MAX_BYTES = 1500 * 1024               # 1 枚の絵の大きさの上限
+PLOT_STALE_SEC = 180                       # 一覧にあるのにデータがない絵を、一覧から消すまでの時間
+# KV は書いた内容がほかの場所から見えるまで最大 60 秒ほどかかる(結果整合)。一覧を読んで書き戻すので、
+# 受け取り済み(データを消した)の番号が一覧に戻ることがある。そういう番号は機械が取りに来たときに一覧から消す
 
 
 def check_plot(data_b64: str):
@@ -241,7 +244,15 @@ class Default(WorkerEntrypoint):
         if sub == "/file" and request.method == "GET":
             text = await store.get(PLOT_PREFIX + plot_id)
             if text is None:
-                return error("その絵はありません", 404, **nocache)
+                # 送った直後でまだ見えていないだけなら 404(機械はあとでやり直す)。
+                # 古いものは受け取り済みか期限切れなので、一覧から消して 410(機械は飛ばす)
+                items = await pending()
+                item = next((i for i in items if i["id"] == plot_id), None)
+                if item is not None and time.time() - item.get("at", 0) < PLOT_STALE_SEC:
+                    return error("その絵はまだ届いていません", 404, **nocache)
+                if item is not None:
+                    await store.put(PLOTS_PENDING_KEY, json.dumps([i for i in items if i["id"] != plot_id], ensure_ascii=False))
+                return error("その絵はもうありません", 410, **nocache)
             return Response(text, headers={"Content-Type": "text/plain", **nocache})
         if sub == "/ack" and request.method == "POST":
             items = [i for i in await pending() if i["id"] != plot_id]
