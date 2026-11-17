@@ -43,6 +43,82 @@ function nameBytes(name) {
   return enc.encode(chars.join(""));
 }
 
+// 線の描く向きを選ぶ。線は逆向きに描いても同じ形なので、描き始めでモーターが止まりかけ(すぐに回る向きが変わる)に
+// ならない向きを選ぶ。止まりかけの所から描き始めると、ペン先の摩擦で腕がガタの中で引っかかっては外れ、
+// 最初の数 mm がジグザグになる(bt の試し描きで、向きが変わる所まで約 5mm の描き始めで出た。約 9mm では出なかった)
+const ORIENT_CHECK_MM = 6;       // 描き始めからこの長さの中で、どちらかのモーターの向きが変わったら「悪い描き始め」
+const ORIENT_STEP_MM = 0.25;     // 調べる点の間隔
+const ORIENT_MAX_EXTRA_MM = 10;  // 逆向きにして移動が増えるのは、ここまでなら許す
+const ORIENT_JOIN_MM = 0.5;      // 前後の線とこれより近い(機械がペンを上げずにつなぐ)線は向きを変えない
+
+// 3 次ベジェの区間 c = [x0, y0, c1x, c1y, c2x, c2y, x1, y1] の t の点
+function bezAt(c, t) {
+  const u = 1 - t, a = u * u * u, b = 3 * u * u * t, d = 3 * u * t * t, e = t * t * t;
+  return [a * c[0] + b * c[2] + d * c[4] + e * c[6], a * c[1] + b * c[3] + d * c[5] + e * c[7]];
+}
+
+// 線の描き始めから ORIENT_CHECK_MM の点(紙の座標)。reverse なら終わりから
+function strokeHeadPoints(s, reverse) {
+  const pts = [];
+  let len = 0;
+  const segs = reverse ? s.slice().reverse() : s;
+  for (const c of segs) {
+    const chord = Math.hypot(c[6] - c[0], c[7] - c[1]) + Math.hypot(c[2] - c[0], c[3] - c[1]) + Math.hypot(c[6] - c[4], c[7] - c[5]);
+    const n = Math.max(2, Math.ceil(chord / ORIENT_STEP_MM));
+    for (let i = pts.length === 0 ? 0 : 1; i <= n; i++) {
+      const p = bezAt(c, reverse ? 1 - i / n : i / n);
+      if (pts.length > 0) len += Math.hypot(p[0] - pts[pts.length - 1][0], p[1] - pts[pts.length - 1][1]);
+      pts.push(p);
+      if (len >= ORIENT_CHECK_MM) return pts;
+    }
+  }
+  return pts;
+}
+
+// 点の列(機械の座標)の間に、どちらかのモーターの回る向きが変わるか
+function motorReversesAlong(machinePts, geom) {
+  const sign = [0, 0];
+  let prev = null;
+  for (const [x, y] of machinePts) {
+    const th = PlotGeometry.ik(geom, x, y);
+    if (!th) return false;   // 解けない所は機械が描かないので、判断しない
+    if (prev) {
+      for (let m = 0; m < 2; m++) {
+        const d = th[m] - prev[m];
+        if (Math.abs(d) < 1e-4) continue;
+        const sg = Math.sign(d);
+        if (sign[m] !== 0 && sg !== sign[m]) return true;
+        sign[m] = sg;
+      }
+    }
+    prev = th;
+  }
+  return false;
+}
+
+// strokes(紙の座標の区間の列の列)の向きをその場で選ぶ。toMachine(x, y) → [機械の x, y] → 逆向きにした数
+function orientStrokesForMotors(strokes, toMachine, geom = PlotGeometry.DEFAULT_GEOM) {
+  const bad = (s, reverse) => motorReversesAlong(strokeHeadPoints(s, reverse).map(([x, y]) => toMachine(x, y)), geom);
+  const startOf = s => [s[0][0], s[0][1]];
+  const endOf = s => [s[s.length - 1][6], s[s.length - 1][7]];
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  let flipped = 0;
+  for (let i = 0; i < strokes.length; i++) {
+    const s = strokes[i];
+    if (!bad(s, false) || bad(s, true)) continue;
+    const st = startOf(s), en = endOf(s);
+    const prev = i > 0 ? endOf(strokes[i - 1]) : null;
+    const next = i + 1 < strokes.length ? startOf(strokes[i + 1]) : null;
+    if ((prev && dist(prev, st) < ORIENT_JOIN_MM) || (next && dist(en, next) < ORIENT_JOIN_MM)) continue;
+    const before = (prev ? dist(prev, st) : 0) + (next ? dist(en, next) : 0);
+    const after = (prev ? dist(prev, en) : 0) + (next ? dist(st, next) : 0);
+    if (after - before > ORIENT_MAX_EXTRA_MM) continue;
+    strokes[i] = s.slice().reverse().map(c => [c[6], c[7], c[4], c[5], c[2], c[3], c[0], c[1]]);
+    flipped++;
+  }
+  return flipped;
+}
+
 // normalizeForPlotter の data(紙の左下が原点、mm)を BEZ2 にする → Uint8Array
 function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.floor(Date.now() / 1000) }) {
   const q = (v) => {
@@ -51,6 +127,14 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
     return r;
   };
   const strokes = data.strokes.filter(s => s.length > 0);
+  // 紙の左下が原点の座標 → 機械の座標。180° 回すときは、紙の中心を軸に回す
+  const W = data.paper.width, H = data.paper.height;
+  const mx = (x) => (SD_ROTATE_180 ? W - x : x) + SD_PAPER_ORIGIN.x;
+  const my = (y) => (SD_ROTATE_180 ? H - y : y) + SD_PAPER_ORIGIN.y;
+  if (typeof PlotGeometry !== "undefined") {
+    const flipped = orientStrokesForMotors(strokes, (x, y) => [mx(x), my(y)]);
+    console.log(`線の向き: ${flipped} 本を逆向きにしました(描き始めがモーターの止まりかけにならないように)`);
+  }
   // 塗り: 輪は 255 個まで、点は 1 輪 65535 個まで。機械は 1 つの塗りで 4000 点・32 輪までしか使わない
   const fills = (data.fills || []).map(rings => rings.slice(0, 32).filter(r => r.length >= 6))
     .filter(rings => rings.length > 0).slice(0, 65535);
@@ -79,10 +163,8 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
   u8.set(uuid, 12);
   u8.set(nb, 28);
   let o = 28 + nb.length;
-  // 紙の左下が原点の座標 → 機械の座標。180° 回すときは、紙の中心を軸に回す
-  const W = data.paper.width, H = data.paper.height;
-  const X = (x) => q((SD_ROTATE_180 ? W - x : x) + SD_PAPER_ORIGIN.x);
-  const Y = (y) => q((SD_ROTATE_180 ? H - y : y) + SD_PAPER_ORIGIN.y);
+  const X = (x) => q(mx(x));
+  const Y = (y) => q(my(y));
   for (const s of strokes) {
     v.setUint16(o, s.length, true);
     v.setInt16(o + 2, X(s[0][0]), true);
