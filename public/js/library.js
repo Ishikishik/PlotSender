@@ -31,7 +31,7 @@ const DEFAULT_SETTINGS = {
   minSegmentLength: 10,
   junctionContinueMinScore: 0.15,
   segmentTurnMinScore: -0.35,
-  bezierEpsilon: 2.8,
+  bezierEpsilon: 1.2,   // 曲線を単純化する細かさ(px)。2.8 では小さく曲がる所に最大 0.3 mm ほどの角が出た(図形のテスト画像で測定)
   widthSmoothRadius: 4,
   emulatorStepPx: 1.2,
   joinMaxPx: 12,             // 前の線の終わりから次の線の始まりまでがこれ以内で、間が黒ければペンを上げずにつなぐ(px)
