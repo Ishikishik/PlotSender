@@ -23,7 +23,9 @@ const DEFAULT_SETTINGS = {
   minComponentArea: 18,
   endpointMaxDist: 30,
   endpointMinCos: 0.58,
-  endpointMinSupport: 0.035,
+  // つなぐ区間の 6 割以上が元の画像で黒いときだけつなぐ。前は 0.035 で、白いところをまたいで 3 mm ほどの
+  // 直線が引かれていた(目のまわりの四角い線など)。前のプレビューは元の黒の範囲だけを表示していたので見えなかった
+  endpointMinSupport: 0.6,
   endpointMaxWidthRatio: 3.2,
   minSegmentPoints: 10,
   minSegmentLength: 10,
