@@ -40,6 +40,9 @@ const DEFAULT_SETTINGS = {
   emulatorStepPx: 1.2,
   joinMaxPx: 12,             // 前の線の終わりから次の線の始まりまでがこれ以内で、間が黒ければペンを上げずにつなぐ(px)
   fillEnabled: true,
+  // 画像の端に触れる塗り、または画像のこの割合より大きい塗りは、絵ではないとみなして消す(線も描かない)。
+  // 画面写真の上の帯(iPad の状態表示の黒い帯)や映画の黒帯を、AI が黒く塗った帯にして、紙の上で大きな塗りになった
+  fillMaxAreaRatio: 0.02,
   fillMinArea: 100,
   fillCoreWidth: 8,
   fillMinMaxWidth: 12,
@@ -187,6 +190,7 @@ function runPipeline(src, settings, timer = createTimer()) {
 
   const bin = t("二値化", () => toBinary(src, settings.binaryThreshold));
   const cleaned = t("小さな塊の除去", () => removeSmallComponents(bin, settings.minComponentArea));
+  t("端と大きすぎる塗りの除去", () => removeFrameSolids(cleaned, settings));
   const dist = t("距離変換", () => distanceMap(cleaned));
   const thin = t("細線化", () => zhangSuenFast(cleaned));
   const connected = t("端点接続", () => connectEndpoints(thin, cleaned, dist, settings));
@@ -812,6 +816,50 @@ function solidRegions(bin, coreWidth) {
   cv.morphologyEx(bin, solid, cv.MORPH_OPEN, kernel);
   kernel.delete();
   return solid;
+}
+
+// 塗りになる太い塊のうち、画像の端に触れる四角い帯、または大きすぎるもの(fillMaxAreaRatio)を bin から消す(その場で書き換える)
+// 塊の周りも少し広げて消すので、その塊の縁は線として残らない。細い線は太い塊ではないので、端に触れていても消えない
+function removeFrameSolids(bin, settings) {
+  if (!settings.fillEnabled || !(settings.fillMaxAreaRatio > 0)) return 0;
+  const solid = solidRegions(bin, settings.fillCoreWidth);
+  const labels = new cv.Mat();
+  const stats = new cv.Mat();
+  const centroids = new cv.Mat();
+  const count = cv.connectedComponentsWithStats(solid, labels, stats, centroids, 8, cv.CV_32S);
+  const maxArea = settings.fillMaxAreaRatio * bin.cols * bin.rows;
+  const drop = new Array(count).fill(false);
+  let dropped = 0;
+  for (let label = 1; label < count; label++) {
+    const area = pixelAt(stats, cv.CC_STAT_AREA, label);
+    const left = pixelAt(stats, cv.CC_STAT_LEFT, label);
+    const top = pixelAt(stats, cv.CC_STAT_TOP, label);
+    const width = pixelAt(stats, cv.CC_STAT_WIDTH, label);
+    const height = pixelAt(stats, cv.CC_STAT_HEIGHT, label);
+    const edge = Math.max(2, Math.round(0.01 * Math.min(bin.cols, bin.rows)));   // 端から 1% 以内は端とみなす
+    const touches = left <= edge || top <= edge || left + width >= bin.cols - edge || top + height >= bin.rows - edge;
+    // 端の帯は四角くべったり(外接する四角の半分以上が黒)。端まで続く太い線は細長く斜めなので、四角の中はほとんど白
+    const slab = area / Math.max(1, width * height) >= 0.5 && Math.min(width, height) >= settings.fillMinMaxWidth;
+    if (area >= settings.fillMinArea && ((touches && slab) || area > maxArea)) { drop[label] = true; dropped++; }
+  }
+  if (dropped > 0) {
+    const mask = cv.Mat.zeros(bin.rows, bin.cols, cv.CV_8UC1);
+    const labelData = pixels(labels).data;
+    const maskData = pixels(mask).data;
+    for (let i = 0; i < labelData.length; i++) if (drop[labelData[i]]) maskData[i] = 255;
+    const size = (Math.max(3, Math.round(settings.fillCoreWidth)) | 1) + 4;
+    const kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE, new cv.Size(size, size));
+    cv.dilate(mask, mask, kernel);
+    kernel.delete();
+    const binData = pixels(bin).data;
+    for (let i = 0; i < maskData.length; i++) if (maskData[i]) binData[i] = 0;
+    mask.delete();
+  }
+  solid.delete();
+  labels.delete();
+  stats.delete();
+  centroids.delete();
+  return dropped;
 }
 
 function extractFillRegions(bin, dist, settings) {
