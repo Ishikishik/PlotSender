@@ -8,9 +8,13 @@
 //   <line> <rect> <circle> <ellipse> <polyline> <polygon> <path> … 線として描く(fill は使わない)
 // 描く順番は、SVG に書いた順番(文字は書き順どおり。線の向きも変えない)。
 //
-// フォントは public/fonts/<名前>.json(tools/make_font.py で ShujiDB から作る)。font-family に名前を書く(初期値 klee)
+// 字の線は機械が SD カードのフォント(/fonts/klee.fnt。tools/make_font.py で ShujiDB から作る)から読んで描く。
+// ページは「どの字を、どう置くか(字の座標 → 機械の座標の 2×3 の行列)」だけを送る(BEZ3。firm/src/jobs/SdPlot.h)。
+// 字の線のデータはフォント由来なので、公開のページには置かない。ページにあるのは字の一覧(public/fonts/<名前>-chars.txt)だけで、
+// プレビューの字はブラウザの文字で描く目安
+// font-family にフォントの名前を書く(初期値 klee)
 
-const TEXT_FONTS = ["klee"];          // public/fonts にあるフォント
+const TEXT_FONTS = ["klee"];          // フォント(番号は機械の STROKE_FONT_FILES と同じ順)
 const TEXT_DEFAULT_FONT = "klee";
 const TEXT_ASCENT = 0.88;             // 横書きで、基準線から字の枠の上までの高さ(字の大きさに対する割合)
 const TEXT_SAMPLE_MM = 0.3;           // 図形(path など)を折れ線にする間隔 [mm]
@@ -24,16 +28,21 @@ const TEXT_SVG_SAMPLE = `<svg viewBox="0 0 91 55">
 </svg>`;
 
 const textFonts = {};
-// フォントを読む(1 回だけ) → { em, glyphs }
+// フォントの字の一覧を読む(1 回だけ) → { em, has: Set }
 function loadTextFont(name) {
   if (!textFonts[name]) {
-    textFonts[name] = fetch(`./fonts/${name}.json`).then(r => {
-      if (!r.ok) throw new Error(`フォント ${name} を読めませんでした`);
-      return r.json();
-    }).catch(e => { delete textFonts[name]; throw e; });
+    textFonts[name] = fetch(`./fonts/${name}-chars.txt`).then(r => {
+      if (!r.ok) throw new Error(`フォント ${name} の字の一覧を読めませんでした`);
+      return r.text();
+    }).then(t => ({ em: 109, has: new Set(t) })).catch(e => { delete textFonts[name]; throw e; });
   }
   return textFonts[name];
 }
+
+// 2×3 の行列 [a, b, c, d, e, f](x' = a x + c y + e、y' = b x + d y + f)。mul(A, B) は B のあとに A
+const matMul = (A, B) => [A[0] * B[0] + A[2] * B[1], A[1] * B[0] + A[3] * B[1], A[0] * B[2] + A[2] * B[3],
+  A[1] * B[2] + A[3] * B[3], A[0] * B[4] + A[2] * B[5] + A[4], A[1] * B[4] + A[3] * B[5] + A[5]];
+const matApply = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
 
 // 半角(英数字・記号)は幅を狭くする
 const isHalfWidth = ch => ch.charCodeAt(0) < 0x2000 || (ch >= "｡" && ch <= "ﾟ");
@@ -41,7 +50,10 @@ const isHalfWidth = ch => ch.charCodeAt(0) < 0x2000 || (ch >= "｡" && ch <= "�
 const VERTICAL_SHIFT = "、。，．";
 const VERTICAL_ROTATE = "ー－-「」（）()―〜～…";
 
-// SVG の文字列 → { data: 紙の上の線(normalizeForPlotter の data と同じ形), warnings: [] }
+// SVG の文字列 → { data: { paper, items, toPaper }, warnings: [] }
+//   items: SVG の座標(1 単位 = 1 mm、y 下向き)の項目を書いた順に。{ segs: [[x0,y0,c1x,c1y,c2x,c2y,x1,y1], ...] }(線)
+//          か { glyph: { font, ch, m } }(字。m は字の座標 → SVG の座標の行列)
+//   toPaper: SVG の座標 → 紙の座標(左下が原点、y 上向き、mm)の行列
 async function svgToPlotData(svgText, paper) {
   const warnings = [];
   // xmlns を書き忘れても SVG として読めるようにする(ないと、ただの XML になって計算できない)
@@ -61,7 +73,7 @@ async function svgToPlotData(svgText, paper) {
   holder.appendChild(svg);
   document.body.appendChild(holder);
 
-  const strokes = [];   // SVG の座標(1 単位 = 1 mm、y 下向き)の線。画ごとに [[x0,y0,c1x,c1y,c2x,c2y,x1,y1], ...]
+  const items = [];
   try {
     const rootInv = svg.getScreenCTM().inverse();
     const toRoot = el => rootInv.multiply(el.getScreenCTM());
@@ -71,9 +83,9 @@ async function svgToPlotData(svgText, paper) {
       const tag = el.localName;
       if (el.closest("defs")) continue;
       if (tag === "text") {
-        await addText(el, toRoot(el), apply, strokes, warnings);
+        await addText(el, toRoot(el), items, warnings);
       } else if (["line", "rect", "circle", "ellipse", "polyline", "polygon", "path"].includes(tag)) {
-        addShape(el, toRoot(el), apply, strokes);
+        addShape(el, toRoot(el), apply, items);
       } else if (!["tspan", "g", "title", "desc", "defs", "style"].includes(tag)) {
         warnings.push(`<${tag}> は使えないので描きません`);
       }
@@ -88,16 +100,16 @@ async function svgToPlotData(svgText, paper) {
   const s = Math.min(1, fitW / vw, fitH / vh);
   if (s < 1) warnings.push(`紙に入らないので ${Math.round(s * 100)}% に縮めました`);
   const ox = (paper.marginLeft || 0) + (fitW - vw * s) / 2, oy = (fitH - vh * s) / 2;
-  const toPaper = (x, y) => [ox + (x - vx) * s, paper.paperHeight - (oy + (y - vy) * s)];   // 紙は左下が原点、y 上向き
-  const paperStrokes = strokes.map(st => st.map(c => [...toPaper(c[0], c[1]), ...toPaper(c[2], c[3]), ...toPaper(c[4], c[5]), ...toPaper(c[6], c[7])]));
+  // 紙は左下が原点、y 上向き: X = ox + (x - vx) s、Y = H - (oy + (y - vy) s)
+  const toPaper = [s, 0, 0, -s, ox - vx * s, paper.paperHeight - oy + vy * s];
   return {
-    data: { paper: { width: paper.paperWidth, height: paper.paperHeight }, strokes: paperStrokes, fills: [] },
+    data: { paper: { width: paper.paperWidth, height: paper.paperHeight }, items, toPaper },
     warnings: [...new Set(warnings)],
   };
 }
 
 // 図形を TEXT_SAMPLE_MM ごとの点にして、直線の 3 次ベジェでつなぐ。大きく飛ぶ所(path の M など)はペンを上げる
-function addShape(el, m, apply, strokes) {
+function addShape(el, m, apply, items) {
   const len = el.getTotalLength();
   if (!(len > 0)) return;
   const n = Math.max(2, Math.ceil(len / TEXT_SAMPLE_MM));
@@ -107,7 +119,7 @@ function addShape(el, m, apply, strokes) {
     const p = el.getPointAtLength(i * step);
     const q = apply(m, p.x, p.y);
     if (prev && Math.hypot(q[0] - prev[0], q[1] - prev[1]) > step * 3) {   // 次の部分(サブパス)へ飛んだ
-      if (cur.length) strokes.push(cur);
+      if (cur.length) items.push({ segs: cur });
       cur = [];
     } else if (prev) {
       cur.push([prev[0], prev[1], prev[0] + (q[0] - prev[0]) / 3, prev[1] + (q[1] - prev[1]) / 3,
@@ -115,7 +127,7 @@ function addShape(el, m, apply, strokes) {
     }
     prev = q;
   }
-  if (cur.length) strokes.push(cur);
+  if (cur.length) items.push({ segs: cur });
 }
 
 const numAttr = (el, name) => {
@@ -126,7 +138,8 @@ const numAttr = (el, name) => {
 };
 
 // <text> を 1 文字ずつ並べる
-async function addText(textEl, m, apply, strokes, warnings) {
+async function addText(textEl, m, items, warnings) {
+  const M = [m.a, m.b, m.c, m.d, m.e, m.f];
   // 文字の流れを集める: [{ch, el}](tspan の x, y, dx, dy は、その tspan の最初の文字で反映する)
   const runs = [];
   const walk = (node, el) => {
@@ -149,7 +162,8 @@ async function addText(textEl, m, apply, strokes, warnings) {
     return TEXT_FONTS.find(n => f.includes(n)) || TEXT_DEFAULT_FONT;
   })();
   const font = await loadTextFont(fontName);
-  const em = font.em || 109;
+  const fontIndex = TEXT_FONTS.indexOf(fontName);
+  const em = font.em;
 
   // 行(x, y が指定されたところで切れる)ごとに並べてから、text-anchor でずらす
   let x = numAttr(textEl, "x") ?? 0, y = numAttr(textEl, "y") ?? 0;
@@ -185,8 +199,7 @@ async function addText(textEl, m, apply, strokes, warnings) {
     const shift = ln.anchor === "middle" ? -length / 2 : ln.anchor === "end" ? -length : 0;
     for (const it of ln.items) {
       if (it.ch === " " || it.ch === "　") continue;
-      const strokesOf = font.glyphs[it.ch];
-      if (!strokesOf) { warnings.push(`「${it.ch}」の字はないので空けました`); continue; }
+      if (!font.has.has(it.ch)) { warnings.push(`「${it.ch}」の字はないので空けました`); continue; }
       const k = it.size / em;
       // 字の枠(em × em)の左上の位置
       let left, top;
@@ -194,13 +207,10 @@ async function addText(textEl, m, apply, strokes, warnings) {
       else { left = it.x + shift - (it.half ? 0.2 * it.size : 0); top = it.y - TEXT_ASCENT * it.size; }
       const rot = vertical && VERTICAL_ROTATE.includes(it.ch);
       const vs = vertical && VERTICAL_SHIFT.includes(it.ch) ? 0.6 * em : 0;
-      const pt = (gx, gy) => {
-        if (rot) [gx, gy] = [em - gy, gx];   // 縦書きの伸ばし棒やかっこは 90° 回す
-        return apply(m, left + (gx + vs) * k, top + (gy - vs) * k);
-      };
-      for (const st of strokesOf) {
-        strokes.push(st.map(c => [...pt(c[0], c[1]), ...pt(c[2], c[3]), ...pt(c[4], c[5]), ...pt(c[6], c[7])]));
-      }
+      // 字の座標 → SVG の座標: (縦書きの伸ばし棒やかっこは 90° 回す) → 右上へ寄せる → 縮めて置く → <text> の変換
+      let G = [k, 0, 0, k, left + vs * k, top - vs * k];
+      if (rot) G = matMul(G, [0, 1, -1, 0, em, 0]);
+      items.push({ glyph: { font: fontIndex, ch: it.ch, m: matMul(M, G) } });
     }
   }
 }
@@ -216,7 +226,7 @@ const textStatus = document.querySelector("#text-status");
 let textData = null;
 let textBusy = false;
 
-// 紙の上の線を、紙の絵(上がページの上)としてペンの太さで描く
+// 紙の上の線を、紙の絵(上がページの上)としてペンの太さで描く。字はブラウザの文字で描く(目安。機械は SD のフォントで描く)
 function drawTextPreview(data) {
   const scale = 5;   // 1 mm = 5 px
   const W = PAPER_OPTIONS.paperWidth, H = PAPER_OPTIONS.paperHeight;
@@ -229,16 +239,89 @@ function drawTextPreview(data) {
   g.fillStyle = "#eee";
   g.fillRect(0, 0, (PAPER_OPTIONS.marginLeft || 0) * scale, H * scale);
   g.fillRect((W - (PAPER_OPTIONS.marginRight || 0)) * scale, 0, (PAPER_OPTIONS.marginRight || 0) * scale, H * scale);
-  g.strokeStyle = "#1a2a8a";
+  // SVG の座標 → キャンバスの座標
+  const toCanvas = matMul([scale, 0, 0, -scale, 0, H * scale], data.toPaper);
+  g.strokeStyle = g.fillStyle = "#1a2a8a";
   g.lineWidth = PEN_WIDTH_MM * scale;
   g.lineCap = g.lineJoin = "round";
-  const X = x => x * scale, Y = y => (H - y) * scale;
-  for (const st of data.strokes) {
-    g.beginPath();
-    g.moveTo(X(st[0][0]), Y(st[0][1]));
-    for (const c of st) g.bezierCurveTo(X(c[2]), Y(c[3]), X(c[4]), Y(c[5]), X(c[6]), Y(c[7]));
-    g.stroke();
+  for (const item of data.items) {
+    if (item.segs) {
+      const pt = (x, y) => matApply(toCanvas, x, y);
+      const st = item.segs;
+      g.beginPath();
+      g.moveTo(...pt(st[0][0], st[0][1]));
+      for (const c of st) g.bezierCurveTo(...pt(c[2], c[3]), ...pt(c[4], c[5]), ...pt(c[6], c[7]));
+      g.stroke();
+    } else {
+      const M = matMul(toCanvas, item.glyph.m);
+      g.save();
+      g.setTransform(M[0], M[1], M[2], M[3], M[4], M[5]);
+      g.font = '96px Klee, "Klee One", "Hiragino Maru Gothic ProN", "Hiragino Sans", sans-serif';
+      g.textAlign = "center";
+      g.textBaseline = "middle";
+      g.fillText(item.glyph.ch, 54.5, 54.5);
+      g.restore();
+    }
   }
+}
+
+// 紙の上の項目を BEZ3 にする → Uint8Array(頭は encodeBez2 と同じ。sdsend.js)
+//   線: 区間の数 u16、始点 int16 x, y、区間ごとに int16 × 6(0.01 mm、機械の座標)
+//   字: 0xFFFF、フォントの番号 u8、文字コード u32、置き方 float32 × 6(字の座標 → 機械の座標 [mm])
+function encodeBez3(data, { name, starred }) {
+  const W = data.paper.width, H = data.paper.height;
+  // 紙の座標 → 機械の座標(紙の中心で 180° 回す。encodeBez2 と同じ)
+  const paperToMachine = SD_ROTATE_180 ? [-1, 0, 0, -1, W + SD_PAPER_ORIGIN.x, H + SD_PAPER_ORIGIN.y]
+                                       : [1, 0, 0, 1, SD_PAPER_ORIGIN.x, SD_PAPER_ORIGIN.y];
+  const toMachine = matMul(paperToMachine, data.toPaper);
+  const q = v => {
+    const r = Math.round(v * 100);
+    if (r < -32768 || r > 32767) throw new Error("座標が範囲外です");
+    return r;
+  };
+  const items = data.items.filter(it => it.glyph || it.segs.length > 0);
+  if (items.length > 65535) throw new Error("線が多すぎます");
+  const nb = nameBytes(name);
+  let size = 28 + nb.length;
+  for (const it of items) size += it.glyph ? 2 + 1 + 4 + 24 : 6 + 12 * it.segs.length;
+  const buf = new ArrayBuffer(size);
+  const v = new DataView(buf);
+  const u8 = new Uint8Array(buf);
+  u8.set([0x42, 0x45, 0x5a, 0x33], 0);   // "BEZ3"
+  v.setUint16(4, items.length, true);
+  v.setUint8(6, starred ? 1 : 0);
+  v.setUint8(7, nb.length);
+  v.setUint32(8, Math.floor(Date.now() / 1000), true);
+  u8.set(uuidBytes(), 12);
+  u8.set(nb, 28);
+  let o = 28 + nb.length;
+  for (const it of items) {
+    if (it.glyph) {
+      const m = matMul(toMachine, it.glyph.m);
+      v.setUint16(o, 0xffff, true);
+      v.setUint8(o + 2, it.glyph.font);
+      v.setUint32(o + 3, it.glyph.ch.codePointAt(0), true);
+      for (let i = 0; i < 6; i++) v.setFloat32(o + 7 + 4 * i, m[i], true);
+      o += 31;
+    } else {
+      const st = it.segs;
+      const p0 = matApply(toMachine, st[0][0], st[0][1]);
+      v.setUint16(o, st.length, true);
+      v.setInt16(o + 2, q(p0[0]), true);
+      v.setInt16(o + 4, q(p0[1]), true);
+      o += 6;
+      for (const c of st) {
+        for (let k = 2; k < 8; k += 2) {
+          const p = matApply(toMachine, c[k], c[k + 1]);
+          v.setInt16(o, q(p[0]), true);
+          v.setInt16(o + 2, q(p[1]), true);
+          o += 4;
+        }
+      }
+    }
+  }
+  if (o !== size) throw new Error("BEZ3 の大きさが合いません");
+  return u8;
 }
 
 async function updateTextPreview() {
@@ -255,7 +338,7 @@ async function updateTextPreview() {
 }
 
 function updateTextSendButton() {
-  textSendButton.disabled = textBusy || !textData || !textData.strokes.length || !textNameInput.value.trim() || !plotSendToken();
+  textSendButton.disabled = textBusy || !textData || !textData.items.length || !textNameInput.value.trim() || !plotSendToken();
 }
 
 let textTimer = null;
@@ -275,8 +358,7 @@ textSendButton.addEventListener("click", async () => {
   updateTextSendButton();
   textStatus.textContent = "送っています…";
   try {
-    // 書き順と線の向きを守るので、向きは変えない(keepDirection)
-    const bez = encodeBez2(textData, { name: textNameInput.value, starred: false, keepDirection: true });
+    const bez = encodeBez3(textData, { name: textNameInput.value, starred: false });
     const response = await fetch("/api/plots", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -60,7 +60,8 @@ def check_plot(data_b64: str):
     raw = base64.b64decode(data_b64, validate=True)
     if len(raw) > PLOT_MAX_BYTES:
         raise ValueError("絵が大きすぎる")
-    if len(raw) < 28 or raw[:4] != b"BEZ2" or len(raw) < 28 + raw[7]:
+    # BEZ3 は頭が BEZ2 と同じ(線の並びに字の項目を混ぜられる。public/js/svgtext.js)
+    if len(raw) < 28 or raw[:4] not in (b"BEZ2", b"BEZ3") or len(raw) < 28 + raw[7]:
         raise ValueError("形式が違う")
     plot_id = raw[12:28].hex()
     if plot_id == "0" * 32:

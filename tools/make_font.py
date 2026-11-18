@@ -1,17 +1,23 @@
-"""ShujiDB v2 のデータから、PlotSender の文字(public/js/svgtext.js)で使う軽いフォントを作る。
+"""ShujiDB v2 のデータから、ペンプロッターで文字を書くためのフォントを作る。
 
+字の線のデータは機械の SD カードに入れる(公開のページには置かない)。ページは字があるかどうかだけを知ればよいので、
+字の一覧(文字だけ)を別に作る。
 ペンで描くので、中心線(center)だけを使い、太さ(width)は捨てる。座標は 0.1 単位に丸める。
 足りない記号(、。ー「」・ など)は、ここで手書きの線を足す。
 
 使い方:
-  python3 tools/make_font.py ~/Byomato/test/opencv/ShujiDB/v2/data/klee.json public/fonts/klee.json
+  python3 tools/make_font.py ~/Byomato/test/opencv/ShujiDB/v2/data/klee.json klee.fnt public/fonts/klee-chars.txt
+  → klee.fnt を SD カードの /fonts/klee.fnt に入れる
 
-出力: {"name", "license", "em": 109, "glyphs": {"字": [[[x0,y0,x1,y1,x2,y2,x3,y3], ...], ...]}}
-  glyphs の値は画(1 回ペンを下ろす線)の並び。画は書き順どおり。座標は 109×109、左上が原点、y は下向き
+klee.fnt(FNT1 形式、リトルエンディアン。firm/src/jobs/StrokeFont.h が読む):
+  "FNT1"、em u16(109)、字の数 u16、
+  目次: 字の数 × (文字コード u32、字のデータの位置 u32)。文字コードの小さい順(二分探索で引く)
+  字のデータ: 画の数 u8、画ごとに 区間の数 u16、始点 int16 x, y、区間ごとに int16 × 6(制御点1、制御点2、終点)
+  座標は 0.1 単位(109 × 109 の字の枠、左上が原点、y は下向き)。画は書き順どおり
 """
 
 import json
-import math
+import struct
 import sys
 
 
@@ -62,7 +68,7 @@ EXTRA = {
 }
 
 
-def main(src, dst):
+def main(src, fnt_path, chars_path):
     d = json.load(open(src, encoding="utf-8"))
     rnd = lambda seg: [round(v, 1) for v in seg]
     glyphs = {ch: [[rnd(seg) for seg in s["center"]] for s in g["strokes"]] for ch, g in d["glyphs"].items()}
@@ -71,16 +77,29 @@ def main(src, dst):
         if ch not in glyphs:
             glyphs[ch] = [[rnd(seg) for seg in s] for s in strokes]
             added.append(ch)
-    out = {
-        "name": d.get("font", {}).get("label", ""),
-        "license": "中心線は KanjiVG (CC BY-SA 3.0, Ulrich Apel) をもとに ShujiDB で作成",
-        "em": 109,
-        "glyphs": glyphs,
-    }
-    with open(dst, "w", encoding="utf-8") as f:
-        json.dump(out, f, ensure_ascii=False, separators=(",", ":"))
-    print(f"{len(glyphs)} glyphs ({len(added)} added: {''.join(added)}) -> {dst}")
+    chars = sorted(glyphs, key=ord)
+    # 字のデータ
+    q = lambda v: int(round(v * 10))
+    bodies = []
+    for ch in chars:
+        b = bytearray(struct.pack("<B", len(glyphs[ch])))
+        for st in glyphs[ch]:
+            b += struct.pack("<Hhh", len(st), q(st[0][0]), q(st[0][1]))
+            for seg in st:
+                b += struct.pack("<6h", *(q(v) for v in seg[2:8]))
+        bodies.append(bytes(b))
+    head = b"FNT1" + struct.pack("<HH", 109, len(chars))
+    pos = len(head) + 8 * len(chars)
+    index = bytearray()
+    for ch, body in zip(chars, bodies):
+        index += struct.pack("<II", ord(ch), pos)
+        pos += len(body)
+    with open(fnt_path, "wb") as f:
+        f.write(head + bytes(index) + b"".join(bodies))
+    with open(chars_path, "w", encoding="utf-8") as f:
+        f.write("".join(chars))
+    print(f"{len(chars)} glyphs ({len(added)} added: {''.join(added)}) -> {fnt_path} ({pos // 1024} KB), {chars_path}")
 
 
 if __name__ == "__main__":
-    main(sys.argv[1], sys.argv[2])
+    main(sys.argv[1], sys.argv[2], sys.argv[3])
