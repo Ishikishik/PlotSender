@@ -80,11 +80,22 @@
 
       <!-- パンタグラフのタブだけに出す: 文字(SVG) -->
       <section id="text-plot" class="text-plot" hidden>
-        <h2>文字(SVG)</h2>
-        <p>SVG で文字と線を書くと、書き順どおりにペンで書きます。1 = 1 mm。viewBox の大きさで紙の真ん中に置きます。
+        <h2>文字</h2>
+        <div class="text-tools">
+          <button id="text-horizontal" type="button" aria-pressed="true">横書き</button>
+          <button id="text-vertical" type="button" aria-pressed="false">縦書き</button>
+          <label>1 文字の大きさ <input id="text-size" type="number" min="2" max="40" step="0.5" value="8"> mm</label>
+          <button id="text-live" type="button" disabled>ライブ開始</button>
+          <span id="text-live-status" role="status" aria-live="polite"></span>
+        </div>
+        <input id="text-live-input" type="text" autocomplete="off" placeholder="ここに打つと、確定した字から機械が書きます(Enter で改行)" hidden>
+        <p>打った文字を、書き順どおりにペンで書きます。横書き・縦書きと大きさは上のボタンで選びます。
+          ライブ: PC で「ESP32と接続」してから「ライブ開始」を押すと、タイプライターのように、打つそばから機械が 1 字ずつ書きます
+          (紙の左上・縦書きは右上から。Enter で改行、端で折り返し。書いた字は消せません)。<br>
+          SVG(&lt;svg&gt; から始める)も書けます。1 = 1 mm、viewBox の大きさで紙の真ん中に置きます。
           使えるもの: &lt;text&gt;(x, y, font-size, writing-mode="vertical-rl", letter-spacing, text-anchor, transform)、
           &lt;tspan&gt;、&lt;line&gt; &lt;rect&gt; &lt;circle&gt; &lt;ellipse&gt; &lt;polyline&gt; &lt;polygon&gt; &lt;path&gt;。書いた順に描きます。</p>
-        <textarea id="text-svg" rows="12" spellcheck="false"></textarea>
+        <textarea id="text-svg" rows="8" spellcheck="false"></textarea>
         <canvas id="text-preview"></canvas>
         <p id="text-warn" role="status" aria-live="polite"></p>
         <div class="send-plot">

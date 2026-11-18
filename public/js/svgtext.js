@@ -1,4 +1,9 @@
-// 文字(SVG)をペンプロッターの線にする。
+// 文字をペンプロッターの線にする。
+//
+// ふつうは打った文字をそのまま書く(上のボタンで横書き・縦書きと 1 文字の大きさを選ぶ。中で SVG にする: plainTextToSvg)。
+// <svg から始めると SVG として読む(下の説明)。
+// ライブ(PC の Web Serial)はタイプライター: ライブ用の欄に打つと、確定した字から 1 字ずつ、紙の上の今の位置に書いて
+// 位置を進める(Enter で改行、紙の端で折り返す。書いた字は消せない)。機械側は jobs/LivePlot.h
 //
 // SVG の一部を読んで、紙(PAPER_OPTIONS、mm)の上の線(3 次ベジェ)にする。1 単位 = 1 mm として書く。
 //   <svg viewBox="0 0 91 55"> … 名刺の大きさなら 91×55 mm。紙の真ん中に置く(紙に入らなければ縮める)
@@ -225,6 +230,8 @@ const textSendButton = document.querySelector("#text-send");
 const textStatus = document.querySelector("#text-status");
 let textData = null;
 let textBusy = false;
+let textTimer = null;
+let liveState = "off";        // ライブの状態: off / starting / live / ending(下のライブの所)
 
 // 紙の上の線を、紙の絵(上がページの上)としてペンの太さで描く。字はブラウザの文字で描く(目安。機械は SD のフォントで描く)
 function drawTextPreview(data) {
@@ -265,70 +272,127 @@ function drawTextPreview(data) {
   }
 }
 
-// 紙の上の項目を BEZ3 にする → Uint8Array(頭は encodeBez2 と同じ。sdsend.js)
-//   線: 区間の数 u16、始点 int16 x, y、区間ごとに int16 × 6(0.01 mm、機械の座標)
-//   字: 0xFFFF、フォントの番号 u8、文字コード u32、置き方 float32 × 6(字の座標 → 機械の座標 [mm])
-function encodeBez3(data, { name, starred }) {
+// 紙の座標 → 機械の座標(紙の中心で 180° 回す。encodeBez2 と同じ)の行列と合わせて、SVG の座標 → 機械の座標の行列
+function svgToMachine(data) {
   const W = data.paper.width, H = data.paper.height;
-  // 紙の座標 → 機械の座標(紙の中心で 180° 回す。encodeBez2 と同じ)
   const paperToMachine = SD_ROTATE_180 ? [-1, 0, 0, -1, W + SD_PAPER_ORIGIN.x, H + SD_PAPER_ORIGIN.y]
                                        : [1, 0, 0, 1, SD_PAPER_ORIGIN.x, SD_PAPER_ORIGIN.y];
-  const toMachine = matMul(paperToMachine, data.toPaper);
+  return matMul(paperToMachine, data.toPaper);
+}
+
+// 1 項目を BEZ3 の項目のバイト列にする
+//   線: 区間の数 u16、始点 int16 x, y、区間ごとに int16 × 6(0.01 mm、機械の座標)
+//   字: 0xFFFF、フォントの番号 u8、文字コード u32、置き方 float32 × 6(字の座標 → 機械の座標 [mm])
+function encodeItem(it, toMachine) {
   const q = v => {
     const r = Math.round(v * 100);
     if (r < -32768 || r > 32767) throw new Error("座標が範囲外です");
     return r;
   };
-  const items = data.items.filter(it => it.glyph || it.segs.length > 0);
-  if (items.length > 65535) throw new Error("線が多すぎます");
+  if (it.glyph) {
+    const u8 = new Uint8Array(31), v = new DataView(u8.buffer);
+    const m = matMul(toMachine, it.glyph.m);
+    v.setUint16(0, 0xffff, true);
+    v.setUint8(2, it.glyph.font);
+    v.setUint32(3, it.glyph.ch.codePointAt(0), true);
+    for (let i = 0; i < 6; i++) v.setFloat32(7 + 4 * i, m[i], true);
+    return u8;
+  }
+  const st = it.segs;
+  const u8 = new Uint8Array(6 + 12 * st.length), v = new DataView(u8.buffer);
+  const p0 = matApply(toMachine, st[0][0], st[0][1]);
+  v.setUint16(0, st.length, true);
+  v.setInt16(2, q(p0[0]), true);
+  v.setInt16(4, q(p0[1]), true);
+  let o = 6;
+  for (const c of st) {
+    for (let k = 2; k < 8; k += 2) {
+      const p = matApply(toMachine, c[k], c[k + 1]);
+      v.setInt16(o, q(p[0]), true);
+      v.setInt16(o + 2, q(p[1]), true);
+      o += 4;
+    }
+  }
+  return u8;
+}
+
+// 紙の上の項目を BEZ3 にする → Uint8Array(頭は encodeBez2 と同じ。sdsend.js)
+function encodeBez3(data, { name, starred }) {
+  const toMachine = svgToMachine(data);
+  const parts = data.items.filter(it => it.glyph || it.segs.length > 0).map(it => encodeItem(it, toMachine));
+  if (parts.length > 65535) throw new Error("線が多すぎます");
   const nb = nameBytes(name);
-  let size = 28 + nb.length;
-  for (const it of items) size += it.glyph ? 2 + 1 + 4 + 24 : 6 + 12 * it.segs.length;
-  const buf = new ArrayBuffer(size);
-  const v = new DataView(buf);
-  const u8 = new Uint8Array(buf);
+  const size = 28 + nb.length + parts.reduce((n, p) => n + p.length, 0);
+  const u8 = new Uint8Array(size), v = new DataView(u8.buffer);
   u8.set([0x42, 0x45, 0x5a, 0x33], 0);   // "BEZ3"
-  v.setUint16(4, items.length, true);
+  v.setUint16(4, parts.length, true);
   v.setUint8(6, starred ? 1 : 0);
   v.setUint8(7, nb.length);
   v.setUint32(8, Math.floor(Date.now() / 1000), true);
   u8.set(uuidBytes(), 12);
   u8.set(nb, 28);
   let o = 28 + nb.length;
-  for (const it of items) {
-    if (it.glyph) {
-      const m = matMul(toMachine, it.glyph.m);
-      v.setUint16(o, 0xffff, true);
-      v.setUint8(o + 2, it.glyph.font);
-      v.setUint32(o + 3, it.glyph.ch.codePointAt(0), true);
-      for (let i = 0; i < 6; i++) v.setFloat32(o + 7 + 4 * i, m[i], true);
-      o += 31;
-    } else {
-      const st = it.segs;
-      const p0 = matApply(toMachine, st[0][0], st[0][1]);
-      v.setUint16(o, st.length, true);
-      v.setInt16(o + 2, q(p0[0]), true);
-      v.setInt16(o + 4, q(p0[1]), true);
-      o += 6;
-      for (const c of st) {
-        for (let k = 2; k < 8; k += 2) {
-          const p = matApply(toMachine, c[k], c[k + 1]);
-          v.setInt16(o, q(p[0]), true);
-          v.setInt16(o + 2, q(p[1]), true);
-          o += 4;
-        }
-      }
-    }
-  }
-  if (o !== size) throw new Error("BEZ3 の大きさが合いません");
+  for (const p of parts) { u8.set(p, o); o += p.length; }
   return u8;
 }
 
+// ---- 打った文字 → SVG ----
+
+const textHorizontalButton = document.querySelector("#text-horizontal");
+const textVerticalButton = document.querySelector("#text-vertical");
+const textSizeInput = document.querySelector("#text-size");
+let textVertical = false;
+const TEXT_PAD_MM = 4;          // 紙の端からあける幅
+const TEXT_LINE_GAP = 1.4;      // 行の間隔(字の大きさの何倍か)
+
+const escapeXml = t => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// 打った文字を SVG にする。紙の描ける範囲いっぱいを viewBox にして、横書きは左上から、縦書きは右上から並べる
+function plainTextToSvg(text, vertical, size, paper) {
+  const w = paper.paperWidth - (paper.marginLeft || 0) - (paper.marginRight || 0), h = paper.paperHeight;
+  const lines = text.split("\n");
+  const out = [`<svg viewBox="0 0 ${w} ${h}">`];
+  lines.forEach((line, i) => {
+    if (!line) return;
+    if (vertical) {
+      const x = w - TEXT_PAD_MM - size / 2 - i * size * TEXT_LINE_GAP;
+      out.push(`<text x="${x}" y="${TEXT_PAD_MM}" font-size="${size}" writing-mode="vertical-rl">${escapeXml(line)}</text>`);
+    } else {
+      const y = TEXT_PAD_MM + size * TEXT_ASCENT + i * size * TEXT_LINE_GAP;
+      out.push(`<text x="${TEXT_PAD_MM}" y="${y}" font-size="${size}">${escapeXml(line)}</text>`);
+    }
+  });
+  out.push("</svg>");
+  return out.join("\n");
+}
+
+// 欄の中身 → SVG(<svg から始まっていればそのまま)
+function textInputToSvg() {
+  const t = textSvgInput.value;
+  if (/^\s*<svg[\s>]/.test(t)) return t;
+  const size = Math.min(40, Math.max(2, parseFloat(textSizeInput.value) || 8));
+  return plainTextToSvg(t, textVertical, size, PAPER_OPTIONS);
+}
+
+function setTextVertical(v) {
+  if (liveState === "live" && liveItems.length) return;   // ライブで書き始めたら、向きは変えない
+  textVertical = v;
+  textHorizontalButton.setAttribute("aria-pressed", String(!v));
+  textVerticalButton.setAttribute("aria-pressed", String(v));
+  updateTextPreview();
+}
+textHorizontalButton.addEventListener("click", () => setTextVertical(false));
+textVerticalButton.addEventListener("click", () => setTextVertical(true));
+textSizeInput.addEventListener("input", () => {
+  clearTimeout(textTimer);
+  textTimer = setTimeout(updateTextPreview, 400);
+});
+
 async function updateTextPreview() {
   try {
-    const { data, warnings } = await svgToPlotData(textSvgInput.value, PAPER_OPTIONS);
+    const { data, warnings } = await svgToPlotData(textInputToSvg(), PAPER_OPTIONS);
     textData = data;
-    drawTextPreview(data);
+    if (liveState === "live") drawLivePreview(); else drawTextPreview(data);
     textWarn.textContent = warnings.join("。") + (warnings.length ? "。" : "");
   } catch (error) {
     textData = null;
@@ -341,8 +405,14 @@ function updateTextSendButton() {
   textSendButton.disabled = textBusy || !textData || !textData.items.length || !textNameInput.value.trim() || !plotSendToken();
 }
 
-let textTimer = null;
-textSvgInput.value = TEXT_SVG_SAMPLE;
+textSvgInput.placeholder = "ここに文字を打つ(<svg から始めると SVG として読みます)\n\nSVG の例:\n" + TEXT_SVG_SAMPLE;
+let textComposing = false;   // 日本語入力の変換中(確定するまでライブでは送らない)
+textSvgInput.addEventListener("compositionstart", () => { textComposing = true; });
+textSvgInput.addEventListener("compositionend", () => {
+  textComposing = false;
+  clearTimeout(textTimer);
+  textTimer = setTimeout(updateTextPreview, 200);
+});
 textSvgInput.addEventListener("input", () => {
   clearTimeout(textTimer);
   textTimer = setTimeout(updateTextPreview, 400);   // 打ち終わってから描き直す
@@ -375,3 +445,167 @@ textSendButton.addEventListener("click", async () => {
     updateTextSendButton();
   }
 });
+
+// ---- ライブ: タイプライター(PC の Web Serial で、打つそばから機械が書く。firm/src/jobs/LivePlot.h) ----
+//   live → "live ready" を待つ → 字を "L <番号> <base64>"(BEZ3 の字の項目)で送る → 機械は描き終わるごとに "ld <番号>"
+//   一度に送るのは LIVE_IN_FLIGHT 個まで(機械の待ち行列をあふれさせない)。終えるときは lend → "live end"
+// 字の位置(カーソル)はページが持つ。横書きは左上から右へ、縦書きは右上から下へ進み、端で折り返す
+
+const textLiveButton = document.querySelector("#text-live");
+const textLiveStatus = document.querySelector("#text-live-status");
+const textLiveInput = document.querySelector("#text-live-input");
+const LIVE_IN_FLIGHT = 6;
+let liveOut = [];          // まだ送っていない行
+let liveInFlight = 0;
+let liveSeq = 0;
+let liveItems = [];        // 書いた(送った)字。プレビュー用
+let liveCursor = null;     // { line, pos }: 何行目(縦書きは何列目)の、行の始まりからの長さ [mm]
+let liveComposing = false;
+
+// 紙の描ける範囲(左上が原点、y 下向き、mm)→ 紙の座標の行列
+function liveArea() {
+  const p = PAPER_OPTIONS;
+  const w = p.paperWidth - (p.marginLeft || 0) - (p.marginRight || 0), h = p.paperHeight;
+  return { w, h, toPaper: [1, 0, 0, -1, p.marginLeft || 0, h] };
+}
+
+const liveSize = () => Math.min(40, Math.max(2, parseFloat(textSizeInput.value) || 8));
+
+// 1 字を今の位置に置いて送り、位置を進める
+async function liveType(ch) {
+  const { w, h, toPaper } = liveArea();
+  const size = liveSize(), gap = size * TEXT_LINE_GAP;
+  const font = await loadTextFont(TEXT_DEFAULT_FONT);
+  if (ch === "\n") { liveCursor.line++; liveCursor.pos = 0; return; }
+  const half = isHalfWidth(ch);
+  const adv = (ch === " " ? 0.4 : ch === "\u3000" ? 1 : half ? 0.6 : 1) * size;
+  const lineLen = textVertical ? h - 2 * TEXT_PAD_MM : w - 2 * TEXT_PAD_MM;
+  if (liveCursor.pos > 0 && liveCursor.pos + adv > lineLen) { liveCursor.line++; liveCursor.pos = 0; }   // 端で折り返す
+  // 字の枠の左上(描ける範囲の座標)
+  let left, top;
+  if (textVertical) {
+    left = w - TEXT_PAD_MM - size - liveCursor.line * gap;
+    top = TEXT_PAD_MM + liveCursor.pos;
+    if (left < 0) { textLiveStatus.textContent = "紙がいっぱいです"; return; }
+  } else {
+    left = TEXT_PAD_MM + liveCursor.pos - (half ? 0.2 * size : 0);
+    top = TEXT_PAD_MM + liveCursor.line * gap;
+    if (top + size > h) { textLiveStatus.textContent = "紙がいっぱいです"; return; }
+  }
+  liveCursor.pos += adv;
+  if (ch === " " || ch === "\u3000") return;
+  if (!font.has.has(ch)) { textWarn.textContent = `「${ch}」の字はないので空けました。`; return; }
+  const em = font.em, k = size / em;
+  const rot = textVertical && VERTICAL_ROTATE.includes(ch);
+  const vs = textVertical && VERTICAL_SHIFT.includes(ch) ? 0.6 * em : 0;
+  let G = [k, 0, 0, k, left + vs * k, top - vs * k];
+  if (rot) G = matMul(G, [0, 1, -1, 0, em, 0]);
+  const item = { glyph: { font: TEXT_FONTS.indexOf(TEXT_DEFAULT_FONT), ch, m: G } };
+  liveItems.push(item);
+  const data = { paper: { width: PAPER_OPTIONS.paperWidth, height: PAPER_OPTIONS.paperHeight }, items: liveItems, toPaper };
+  liveOut.push(toBase64(encodeItem(item, svgToMachine(data))));
+  livePump();
+}
+
+// ライブの紙のプレビュー(書いた字と、次に書く位置)
+function drawLivePreview() {
+  const { w, h, toPaper } = liveArea();
+  drawTextPreview({ paper: { width: PAPER_OPTIONS.paperWidth, height: PAPER_OPTIONS.paperHeight }, items: liveItems, toPaper });
+  if (!liveCursor) return;
+  const size = liveSize(), gap = size * TEXT_LINE_GAP, scale = 5;
+  const x = textVertical ? w - TEXT_PAD_MM - size - liveCursor.line * gap : TEXT_PAD_MM + liveCursor.pos;
+  const y = textVertical ? TEXT_PAD_MM + liveCursor.pos : TEXT_PAD_MM + liveCursor.line * gap;
+  const [px, py] = matApply(toPaper, x, y);
+  const g = textPreview.getContext("2d");
+  g.strokeStyle = "#d33";
+  g.lineWidth = 1;
+  g.strokeRect(px * scale, (PAPER_OPTIONS.paperHeight - py) * scale, (textVertical ? size : size * 0.6) * scale, (textVertical ? size * 0.6 : size) * scale);
+}
+
+// ライブ用の欄: 確定した字を 1 字ずつ書いて欄を空にする。Enter で改行
+async function liveTakeInput() {
+  if (liveComposing || liveState !== "live") return;
+  const t = textLiveInput.value;
+  if (!t) return;
+  textLiveInput.value = "";
+  for (const ch of t) await liveType(ch);
+  drawLivePreview();
+}
+textLiveInput.addEventListener("compositionstart", () => { liveComposing = true; });
+textLiveInput.addEventListener("compositionend", () => { liveComposing = false; liveTakeInput(); });
+textLiveInput.addEventListener("input", () => liveTakeInput());
+textLiveInput.addEventListener("keydown", async (e) => {
+  if (e.key === "Enter" && !e.isComposing && !liveComposing) {
+    e.preventDefault();
+    await liveTakeInput();
+    await liveType("\n");
+    drawLivePreview();
+  }
+});
+
+function liveUpdateUi() {
+  textLiveButton.disabled = liveState === "starting" || liveState === "ending" || !serialIsConnected();
+  textLiveButton.textContent = liveState === "live" ? "ライブ終了" : "ライブ開始";
+  textLiveInput.hidden = liveState !== "live";
+  if (textLiveStatus.textContent === "紙がいっぱいです" && liveState === "live") return;
+  textLiveStatus.textContent = liveState === "starting" ? "準備中(キャリブレーション)…"
+    : liveState === "live" ? (liveOut.length + liveInFlight > 0 ? `書いています(残り ${liveOut.length + liveInFlight})` : "ライブ中: 下の欄に打つと書きます")
+    : liveState === "ending" ? "終わりにしています…" : "";
+}
+
+async function livePump() {
+  while (liveState === "live" && liveInFlight < LIVE_IN_FLIGHT && liveOut.length > 0) {
+    const b64 = liveOut.shift();
+    liveInFlight++;
+    try {
+      await serialSend(`L ${++liveSeq} ${b64}`);
+    } catch (error) {
+      textLiveStatus.textContent = `送れませんでした（${error.message}）`;
+      liveState = "off";
+      break;
+    }
+  }
+  liveUpdateUi();
+}
+
+onSerialReceive((line) => {
+  if (line === "live ready") {
+    liveState = "live";
+    liveOut = [];
+    liveInFlight = 0;
+    liveItems = [];
+    liveCursor = { line: 0, pos: 0 };
+    textLiveInput.hidden = false;
+    textLiveInput.focus();
+    drawLivePreview();
+  } else if (line.startsWith("ld ") || line.startsWith("live full") || line.startsWith("live bad")) {
+    liveInFlight = Math.max(0, liveInFlight - 1);
+    if (!line.startsWith("ld ")) console.warn(line);
+    livePump();
+  } else if (line === "live end" || line.startsWith("live NG") || line === "live not running") {
+    liveState = "off";
+    if (line.startsWith("live NG")) textLiveStatus.textContent = "始められませんでした(キャリブレーション)";
+    updateTextPreview();   // 欄の文字のプレビューに戻す
+  } else {
+    return;
+  }
+  liveUpdateUi();
+});
+
+textLiveButton.addEventListener("click", async () => {
+  try {
+    if (liveState === "live") {
+      liveState = "ending";
+      await serialSend("lend");
+    } else {
+      liveState = "starting";
+      await serialSend("live");
+    }
+  } catch (error) {
+    liveState = "off";
+    textLiveStatus.textContent = `送れませんでした（${error.message}）`;
+  }
+  liveUpdateUi();
+});
+setInterval(liveUpdateUi, 1000);   // ESP32 と接続したらボタンを有効にする
+liveUpdateUi();

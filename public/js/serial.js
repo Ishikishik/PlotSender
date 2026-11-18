@@ -10,7 +10,7 @@ let _port = null;
 let _reader = null;
 let _keepReading = false;
 let _readLoopPromise = null;
-let _rxCallback = null;
+let _rxCallbacks = [];
 const _encoder = new TextEncoder();
 
 function serialIsSupported() {
@@ -21,9 +21,9 @@ function serialIsConnected() {
   return _port !== null;
 }
 
-// 受信コールバック登録（1行ごと、改行は除去済み）
+// 受信コールバック登録（1行ごと、改行は除去済み）。いくつでも登録できる(TOTP と、文字のライブ描画)
 function onSerialReceive(callback) {
-  _rxCallback = callback;
+  _rxCallbacks.push(callback);
 }
 
 async function serialConnect(baudRate = 115200) {
@@ -72,7 +72,7 @@ async function _readLoop() {
         while ((idx = buffer.indexOf("\n")) >= 0) {
           const line = buffer.slice(0, idx).replace(/\r$/, "");
           buffer = buffer.slice(idx + 1);
-          if (_rxCallback) _rxCallback(line);
+          for (const cb of _rxCallbacks) cb(line);
         }
       }
     } catch (e) {
