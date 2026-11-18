@@ -49,6 +49,13 @@ const matMul = (A, B) => [A[0] * B[0] + A[2] * B[1], A[1] * B[0] + A[3] * B[1], 
   A[1] * B[2] + A[3] * B[3], A[0] * B[4] + A[2] * B[5] + A[4], A[1] * B[4] + A[3] * B[5] + A[5]];
 const matApply = (M, x, y) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]];
 
+// フォントで使う字にする。ない字は NFKC で直して探す(日本語入力の全角数字「１２３」や全角英字 → 半角)→ 字(なければ null)
+function fontChar(font, ch) {
+  if (font.has.has(ch)) return ch;
+  const n = ch.normalize("NFKC");
+  return n.length === 1 && font.has.has(n) ? n : null;
+}
+
 // 半角(英数字・記号)は幅を狭くする
 const isHalfWidth = ch => ch.charCodeAt(0) < 0x2000 || (ch >= "｡" && ch <= "ﾟ");
 // 縦書きで右上へ寄せる文字と、90° 回す文字
@@ -191,9 +198,10 @@ async function addText(textEl, m, items, warnings) {
     }
     const size = sizeOf(r.el);
     const ls = parseFloat(style(r.el).letterSpacing) || 0;
-    const half = isHalfWidth(r.ch);
-    const adv = (r.ch === " " ? 0.4 : r.ch === "　" ? 1 : half ? 0.6 : 1) * size + ls;
-    line.items.push({ ch: r.ch, x, y, size, half });
+    const ch = fontChar(font, r.ch) ?? r.ch;   // 全角数字などは、フォントにある字に直す
+    const half = isHalfWidth(ch);
+    const adv = (ch === " " ? 0.4 : ch === "　" ? 1 : half ? 0.6 : 1) * size + ls;
+    line.items.push({ ch, x, y, size, half });
     if (vertical) y += adv; else x += adv;
     line.end = vertical ? y - ls : x - ls;
   }
@@ -461,6 +469,24 @@ let liveSeq = 0;
 let liveItems = [];        // 書いた(送った)字。プレビュー用
 let liveCursor = null;     // { line, pos }: 何行目(縦書きは何列目)の、行の始まりからの長さ [mm]
 let liveComposing = false;
+let liveFull = false;      // 紙がいっぱいになった
+
+// 紙がいっぱい: それまでの字を書き終えたら、ライブを終えて待機位置へ戻り、ペンを下ろす(lend。機械の parkNow)
+async function livePaperFull() {
+  if (liveFull) return;
+  liveFull = true;
+  textLiveInput.value = "";
+  textLiveStatus.textContent = "紙がいっぱいです。待機位置に戻ります(新しい紙にして、もう一度ライブ開始)";
+  liveFinish();
+}
+
+// ライブを終える: まだ送っていない字を送り切ってから lend を送る(機械は受け取った字を書き終えてから待機位置へ)
+let liveLendSent = false;
+function liveFinish() {
+  liveState = "ending";
+  liveLendSent = false;
+  livePump();
+}
 
 // 紙の描ける範囲(左上が原点、y 下向き、mm)→ 紙の座標の行列
 function liveArea() {
@@ -473,9 +499,11 @@ const liveSize = () => Math.min(40, Math.max(2, parseFloat(textSizeInput.value) 
 
 // 1 字を今の位置に置いて送り、位置を進める
 async function liveType(ch) {
+  if (liveFull) return;
   const { w, h, toPaper } = liveArea();
   const size = liveSize(), gap = size * TEXT_LINE_GAP;
   const font = await loadTextFont(TEXT_DEFAULT_FONT);
+  ch = fontChar(font, ch) ?? ch;   // 全角数字などは、フォントにある字に直す
   if (ch === "\n") { liveCursor.line++; liveCursor.pos = 0; return; }
   const half = isHalfWidth(ch);
   const adv = (ch === " " ? 0.4 : ch === "\u3000" ? 1 : half ? 0.6 : 1) * size;
@@ -486,11 +514,11 @@ async function liveType(ch) {
   if (textVertical) {
     left = w - TEXT_PAD_MM - size - liveCursor.line * gap;
     top = TEXT_PAD_MM + liveCursor.pos;
-    if (left < 0) { textLiveStatus.textContent = "紙がいっぱいです"; return; }
+    if (left < 0) { livePaperFull(); return; }
   } else {
     left = TEXT_PAD_MM + liveCursor.pos - (half ? 0.2 * size : 0);
     top = TEXT_PAD_MM + liveCursor.line * gap;
-    if (top + size > h) { textLiveStatus.textContent = "紙がいっぱいです"; return; }
+    if (top + size > h) { livePaperFull(); return; }
   }
   liveCursor.pos += adv;
   if (ch === " " || ch === "\u3000") return;
@@ -547,14 +575,14 @@ function liveUpdateUi() {
   textLiveButton.disabled = liveState === "starting" || liveState === "ending" || !serialIsConnected();
   textLiveButton.textContent = liveState === "live" ? "ライブ終了" : "ライブ開始";
   textLiveInput.hidden = liveState !== "live";
-  if (textLiveStatus.textContent === "紙がいっぱいです" && liveState === "live") return;
+  if (liveFull) return;   // 紙がいっぱいの知らせを残す
   textLiveStatus.textContent = liveState === "starting" ? "準備中(キャリブレーション)…"
     : liveState === "live" ? (liveOut.length + liveInFlight > 0 ? `書いています(残り ${liveOut.length + liveInFlight})` : "ライブ中: 下の欄に打つと書きます")
     : liveState === "ending" ? "終わりにしています…" : "";
 }
 
 async function livePump() {
-  while (liveState === "live" && liveInFlight < LIVE_IN_FLIGHT && liveOut.length > 0) {
+  while ((liveState === "live" || liveState === "ending") && liveInFlight < LIVE_IN_FLIGHT && liveOut.length > 0) {
     const b64 = liveOut.shift();
     liveInFlight++;
     try {
@@ -564,6 +592,10 @@ async function livePump() {
       liveState = "off";
       break;
     }
+  }
+  if (liveState === "ending" && liveOut.length === 0 && !liveLendSent) {
+    liveLendSent = true;
+    try { await serialSend("lend"); } catch (error) { liveState = "off"; }
   }
   liveUpdateUi();
 }
@@ -575,6 +607,7 @@ onSerialReceive((line) => {
     liveInFlight = 0;
     liveItems = [];
     liveCursor = { line: 0, pos: 0 };
+    liveFull = false;
     textLiveInput.hidden = false;
     textLiveInput.focus();
     drawLivePreview();
@@ -585,7 +618,9 @@ onSerialReceive((line) => {
   } else if (line === "live end" || line.startsWith("live NG") || line === "live not running") {
     liveState = "off";
     if (line.startsWith("live NG")) textLiveStatus.textContent = "始められませんでした(キャリブレーション)";
-    updateTextPreview();   // 欄の文字のプレビューに戻す
+    liveCursor = null;
+    if (liveItems.length) drawLivePreview();   // 書いた紙の様子を残す(上の欄を書き換えると、そちらのプレビューに戻る)
+    else updateTextPreview();
   } else {
     return;
   }
@@ -595,9 +630,9 @@ onSerialReceive((line) => {
 textLiveButton.addEventListener("click", async () => {
   try {
     if (liveState === "live") {
-      liveState = "ending";
-      await serialSend("lend");
+      liveFinish();
     } else {
+      liveFull = false;
       liveState = "starting";
       await serialSend("live");
     }
