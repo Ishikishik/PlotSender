@@ -15,7 +15,6 @@
   <script defer src="./js/sdsend.js"></script>
   <script defer src="./js/svgtext.js"></script>
   <script defer src="./js/calibration-ui.js"></script>
-  <script defer src="./js/health.js"></script>
 </head>
 <body>
   <header>
@@ -24,8 +23,8 @@
 
   <main>
     <div class="server-check">
-      <button id="check-server" type="button">サーバー接続確認</button>
-      <span id="server-status" role="status" aria-live="polite"></span>
+      <button id="connect-esp" type="button">ESP32と接続</button>
+      <span id="esp-status" role="status"></span>
     </div>
     <nav aria-label="作業モード">
       <button type="button" data-tab="a" aria-controls="workspace" aria-pressed="true">描馬灯</button>
@@ -52,8 +51,6 @@
           <span>AI処理の結果</span>
           <img id="ai-preview" alt="AIで加工した画像" hidden>
         </div>
-        <button id="connect-esp" type="button">ESP32と接続</button>
-        <span id="esp-status" role="status"></span>
         <div class="send-ai">
           <button id="send-to-ai" type="button" data-mode="moderate" disabled>ほどほど AI へ</button>
           <button id="send-to-ai-scene" type="button" data-mode="detailed" disabled>細かく AI へ</button>

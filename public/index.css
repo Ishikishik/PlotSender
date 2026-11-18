@@ -27,7 +27,7 @@ header > span {
   margin-bottom: 20px;
 }
 
-#check-server {
+#connect-esp {
   padding: 4px 12px;
   border: 1px solid black;
   border-radius: 4px;
@@ -37,7 +37,7 @@ header > span {
   cursor: pointer;
 }
 
-#check-server:disabled {
+#connect-esp:disabled {
   cursor: wait;
 }
 
@@ -47,6 +47,11 @@ nav {
   align-items: flex-end;
   gap: 6px;
   overflow-x: auto;   /* 狭い画面ではタブを横にスクロール */
+  scrollbar-width: none;   /* スクロールバーは見せない(タブの下の線の 1 px で縦のバーが出ていた。横にはスクロールできる) */
+}
+
+nav::-webkit-scrollbar {
+  display: none;
 }
 
 nav button {
