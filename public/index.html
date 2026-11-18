@@ -13,6 +13,7 @@
   <script defer src="./js/photo.js"></script>
   <script defer src="./js/geometry.js"></script>
   <script defer src="./js/sdsend.js"></script>
+  <script defer src="./js/svgtext.js"></script>
   <script defer src="./js/calibration-ui.js"></script>
   <script defer src="./js/health.js"></script>
 </head>
@@ -76,6 +77,24 @@
         <p id="paper-status" role="status" aria-live="polite"></p>
       </div>
       </div>
+
+      <!-- パンタグラフのタブだけに出す: 文字(SVG) -->
+      <section id="text-plot" class="text-plot" hidden>
+        <h2>文字(SVG)</h2>
+        <p>SVG で文字と線を書くと、書き順どおりにペンで書きます。1 = 1 mm。viewBox の大きさで紙の真ん中に置きます。
+          使えるもの: &lt;text&gt;(x, y, font-size, writing-mode="vertical-rl", letter-spacing, text-anchor, transform)、
+          &lt;tspan&gt;、&lt;line&gt; &lt;rect&gt; &lt;circle&gt; &lt;ellipse&gt; &lt;polyline&gt; &lt;polygon&gt; &lt;path&gt;。書いた順に描きます。</p>
+        <textarea id="text-svg" rows="12" spellcheck="false"></textarea>
+        <canvas id="text-preview"></canvas>
+        <p id="text-warn" role="status" aria-live="polite"></p>
+        <div class="send-plot">
+          <label for="text-name">名前</label>
+          <input id="text-name" type="text" maxlength="40" autocomplete="off" placeholder="例: 名刺">
+          <button id="text-send" type="button" disabled>プロッタの SD へ送る</button>
+        </div>
+        <p id="text-status" role="status" aria-live="polite"></p>
+        <p class="text-credit">文字の線: KanjiVG (CC BY-SA 3.0, Ulrich Apel) をもとに作成</p>
+      </section>
 
       <!-- パンタグラフのタブだけに出す -->
       <section id="calibration" class="calibration" hidden>

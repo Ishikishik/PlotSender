@@ -248,6 +248,48 @@ h1 {
   }
 }
 
+/* パンタグラフの文字(SVG)の欄 */
+.text-plot {
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid black;
+}
+
+.text-plot h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+#text-svg {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 13px;
+}
+
+#text-preview {
+  display: block;
+  margin-top: 12px;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid black;
+}
+
+#text-send {
+  background: white;
+  color: black;
+  border: 1px solid black;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+}
+
+.text-credit {
+  font-size: 12px;
+  color: #666;
+}
+
 /* パンタグラフの補正の欄 */
 .calibration {
   margin-top: 32px;

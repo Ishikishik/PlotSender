@@ -3,6 +3,7 @@ const workspace = document.querySelector("#workspace");
 const connectwifi = document.querySelector("#connectwifi");
 const modeTitle = document.querySelector("#mode-title");
 const calibration = document.querySelector("#calibration");
+const textPlot = document.querySelector("#text-plot");
 
 // 細かい結果(かかった時間、線の本数、紙の上の大きさなど)は、一般の人にはわかりにくいので隠す。
 // URL に ?debug を付けたときだけ出す(例: https://plotsender.otterstb.com/?debug)
@@ -27,6 +28,7 @@ function switchTab(tab) {
   workspace.hidden = isWifi;
   connectwifi.hidden = !isWifi;
   calibration.hidden = currentTab !== "b";   // 補正の欄はパンタグラフだけ
+  textPlot.hidden = currentTab !== "b";      // 文字(SVG)の欄もパンタグラフだけ
 
   if (!isWifi) {
     // 見出しはタブのボタンの名前にする

@@ -158,7 +158,8 @@ function orientStrokesForMotors(strokes, toMachine, geom = PlotGeometry.DEFAULT_
 }
 
 // normalizeForPlotter の data(紙の左下が原点、mm)を BEZ2 にする → Uint8Array
-function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.floor(Date.now() / 1000) }) {
+// keepDirection: 線の向きを変えない(文字は書き順と書く向きを守る。svgtext.js)
+function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.floor(Date.now() / 1000), keepDirection = false }) {
   const q = (v) => {
     const r = Math.round(v * 100);
     if (r < -32768 || r > 32767) throw new Error("座標が範囲外です");
@@ -170,7 +171,7 @@ function encodeBez2(data, { name, starred, uuid = uuidBytes(), createdAt = Math.
   const mx = (x) => (SD_ROTATE_180 ? W - x : x) + SD_PAPER_ORIGIN.x;
   const my = (y) => (SD_ROTATE_180 ? H - y : y) + SD_PAPER_ORIGIN.y;
   sdLastFlipped = null;
-  if (typeof PlotGeometry !== "undefined") {
+  if (typeof PlotGeometry !== "undefined" && !keepDirection) {
     sdLastFlipped = orientStrokesForMotors(strokes, (x, y) => [mx(x), my(y)]);
     console.log(`線の向き: ${sdLastFlipped} 本を逆向きにしました(描き始めがモーターの止まりかけにならないように)`);
   }
