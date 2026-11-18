@@ -296,9 +296,11 @@ sendPlotButton.addEventListener("click", async () => {
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     if (auth.kind === "qr") sdQrToken = null;   // QR の保存は 1 回だけ
-    sendPlotStatus.textContent = `送りました（${(bez.length / 1024).toFixed(1)} KB${starred ? "・★" : ""}` +
-      `${sdLastFlipped === null ? "" : `・向きを変えた線 ${sdLastFlipped} 本`}）。` +
-      `機械が Wi-Fi で取りに来ると SD に入ります（30 秒ほど）。機械の待ち: ${body.waiting} 枚`;
+    sendPlotStatus.textContent = SHOW_DETAILS
+      ? `送りました（${(bez.length / 1024).toFixed(1)} KB${starred ? "・★" : ""}` +
+        `${sdLastFlipped === null ? "" : `・向きを変えた線 ${sdLastFlipped} 本`}）。` +
+        `機械が Wi-Fi で取りに来ると SD に入ります（30 秒ほど）。機械の待ち: ${body.waiting} 枚`
+      : "送りました。30 秒ほどで機械に届きます。";
   } catch (error) {
     sendPlotStatus.textContent = `送れませんでした（${error.message}）`;
   } finally {

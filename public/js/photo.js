@@ -110,7 +110,7 @@ async function sendPhotoToAI(mode = "moderate") {
     formData.append("token_kind", tokenKind);
     formData.append("mode", mode);
     aiStatus.textContent = "AI で線画にしています…（数秒〜数十秒かかります）" +
-      (upload === file ? "" : `［送信 ${formatMb(file.size)} → ${formatMb(upload.size)}］`);
+      (!SHOW_DETAILS || upload === file ? "" : `［送信 ${formatMb(file.size)} → ${formatMb(upload.size)}］`);
     const sentAt = performance.now();
     const response = await fetch("/api/ai", {
       method: "POST",
@@ -135,7 +135,7 @@ async function sendPhotoToAI(mode = "moderate") {
     aiPreviewUrl = URL.createObjectURL(aiBlob);
     aiPreview.src = aiPreviewUrl;
     aiPreview.hidden = false;
-    aiStatus.textContent = "AI処理の結果を表示しました。" + timingText;
+    aiStatus.textContent = SHOW_DETAILS ? "AI処理の結果を表示しました。" + timingText : "";
     if (tokenKind === "qr") useUpQrToken();
     vectorizeImage(aiBlob);   // 続けてプロッタ用データを作る（vectorize.js）
   } catch (error) {

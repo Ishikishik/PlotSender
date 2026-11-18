@@ -165,7 +165,7 @@ async function vectorizeImage(blob) {
       plotPreview.hidden = false;
 
       const summary = summarizeResult(result);
-      plotStatus.textContent =
+      plotStatus.textContent = !SHOW_DETAILS ? "" :
         `線 ${summary.strokes} 本・塗り ${summary.fills} 個・描画命令 ${summary.drawCommands} 件` +
         `（${(timer.total() / 1000).toFixed(1)} 秒）`;
       updatePaperSummary();
@@ -183,7 +183,7 @@ async function vectorizeImage(blob) {
 function updatePaperSummary() {
   const options = PAPER_OPTIONS;
   downloadPlotButton.disabled = !plotterResult;
-  if (!plotterResult) {
+  if (!plotterResult || !SHOW_DETAILS) {
     paperStatus.textContent = "";
   } else {
     const { stats } = normalizeForPlotter(plotterResult, options);
