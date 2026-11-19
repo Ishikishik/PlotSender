@@ -200,7 +200,7 @@ async function addText(textEl, m, items, warnings) {
     const ls = parseFloat(style(r.el).letterSpacing) || 0;
     const ch = fontChar(font, r.ch) ?? r.ch;   // 全角数字などは、フォントにある字に直す
     const half = isHalfWidth(ch);
-    const adv = (ch === " " ? 0.4 : ch === "　" ? 1 : half ? 0.6 : 1) * size + ls;
+    const adv = charAdvance(ch) * size + ls;
     line.items.push({ ch, x, y, size, half });
     if (vertical) y += adv; else x += adv;
     line.end = vertical ? y - ls : x - ls;
@@ -355,12 +355,40 @@ const TEXT_LINE_GAP = 1.4;      // 行の間隔(字の大きさの何倍か)
 
 const escapeXml = t => t.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// 1 字ぶん進む長さ(字の大きさに対する割合)。addText とライブも同じ決まり
+const charAdvance = ch => ch === " " ? 0.4 : ch === "\u3000" ? 1 : isHalfWidth(ch) ? 0.6 : 1;
+// 行の頭に来てはいけない字(禁則)。行の端に来たら、はみ出して前の行の終わりに付ける(ぶら下げ)
+const LINE_HEAD_NG = "、。，．,.)）」』】〕〉》！？!?ー～ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ々";
+
 // 打った文字を SVG にする。紙の描ける範囲いっぱいを viewBox にして、横書きは左上から、縦書きは右上から並べる
-function plainTextToSvg(text, vertical, size, paper) {
+// 紙の端まで来たら次の行へ折り返す。紙に入りきらない行は書かない → { svg, dropped: 書かなかった字の数 }
+function plainTextToSvg(text, vertical, size, paper, font = null) {
   const w = paper.paperWidth - (paper.marginLeft || 0) - (paper.marginRight || 0), h = paper.paperHeight;
-  const lines = text.split("\n");
+  const lineLen = (vertical ? h : w) - 2 * TEXT_PAD_MM;
+  const gap = size * TEXT_LINE_GAP;
+  const maxLines = vertical ? Math.floor((w - 2 * TEXT_PAD_MM - size) / gap) + 1
+                            : Math.floor((h - 2 * TEXT_PAD_MM - size) / gap) + 1;
+  const lines = [];
+  for (const para of text.split("\n")) {
+    let line = "", pos = 0;
+    for (const raw of para) {
+      const ch = font ? fontChar(font, raw) ?? raw : raw;   // 全角数字などは半角で書くので、幅も半角で測る
+      const adv = charAdvance(ch) * size;
+      if (pos > 0 && pos + adv > lineLen && !LINE_HEAD_NG.includes(ch)) {
+        lines.push(line);
+        line = "";
+        pos = 0;
+        if (ch === " " || ch === "\u3000") continue;   // 折り返した行の頭の空白は捨てる
+      }
+      line += raw;
+      pos += adv;
+    }
+    lines.push(line);
+  }
+  let dropped = 0;
+  for (const line of lines.slice(maxLines)) dropped += [...line.replace(/[ \u3000]/g, "")].length;
   const out = [`<svg viewBox="0 0 ${w} ${h}">`];
-  lines.forEach((line, i) => {
+  lines.slice(0, maxLines).forEach((line, i) => {
     if (!line) return;
     if (vertical) {
       const x = w - TEXT_PAD_MM - size / 2 - i * size * TEXT_LINE_GAP;
@@ -371,15 +399,17 @@ function plainTextToSvg(text, vertical, size, paper) {
     }
   });
   out.push("</svg>");
-  return out.join("\n");
+  return { svg: out.join("\n"), dropped };
 }
 
 // 欄の中身 → SVG(<svg から始まっていればそのまま)
-function textInputToSvg() {
+async function textInputToSvg(warnings) {
   const t = textSvgInput.value;
   if (/^\s*<svg[\s>]/.test(t)) return t;
   const size = Math.min(40, Math.max(2, parseFloat(textSizeInput.value) || 8));
-  return plainTextToSvg(t, textVertical, size, PAPER_OPTIONS);
+  const { svg, dropped } = plainTextToSvg(t, textVertical, size, PAPER_OPTIONS, await loadTextFont(TEXT_DEFAULT_FONT));
+  if (dropped) warnings.push(`紙に入りきらない ${dropped} 字は書きません(字を小さくするか、文を短くしてください)`);
+  return svg;
 }
 
 function setTextVertical(v) {
@@ -398,7 +428,9 @@ textSizeInput.addEventListener("input", () => {
 
 async function updateTextPreview() {
   try {
-    const { data, warnings } = await svgToPlotData(textInputToSvg(), PAPER_OPTIONS);
+    const pre = [];
+    const { data, warnings } = await svgToPlotData(await textInputToSvg(pre), PAPER_OPTIONS);
+    warnings.unshift(...pre);
     textData = data;
     if (liveState === "live") drawLivePreview(); else drawTextPreview(data);
     textWarn.textContent = warnings.join("。") + (warnings.length ? "。" : "");
@@ -471,10 +503,73 @@ let liveCursor = null;     // { line, pos }: 何行目(縦書きは何列目)の
 let liveComposing = false;
 let liveFull = false;      // 紙がいっぱいになった
 
+// ---- 効果音(Web Audio で合成。音のファイルは使わない) ----
+//   字を打つ: カシャッ / 行が変わる(Enter・折り返し): チーン + キャリッジを戻すザーッ / 紙がいっぱい: チーン チーン
+const liveSoundBox = document.querySelector("#text-live-sound");
+try { liveSoundBox.checked = localStorage.getItem("liveSound") !== "off"; } catch (e) {}
+liveSoundBox.addEventListener("change", () => {
+  try { localStorage.setItem("liveSound", liveSoundBox.checked ? "on" : "off"); } catch (e) {}
+});
+let liveAudio = null;
+function audio() {
+  if (!liveSoundBox.checked) return null;
+  try {
+    liveAudio ??= new AudioContext();
+    if (liveAudio.state === "suspended") liveAudio.resume();
+  } catch (e) { return null; }
+  return liveAudio;
+}
+function noiseBuffer(ac, sec) {
+  const b = ac.createBuffer(1, Math.ceil(ac.sampleRate * sec), ac.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return b;
+}
+// 雑音を filter に通して、gain の山を付けて鳴らす
+function noiseHit(ac, t, { dur, freq, q = 1, type = "bandpass", peak, attack = 0.001 }) {
+  const src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  src.buffer = noiseBuffer(ac, dur);
+  f.type = type; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(0, t);
+  g.gain.linearRampToValueAtTime(peak, t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f).connect(g).connect(ac.destination);
+  src.start(t); src.stop(t + dur);
+}
+function soundKey() {
+  const ac = audio(); if (!ac) return;
+  const t = ac.currentTime, v = 0.85 + Math.random() * 0.3;   // 毎回少しずつ違う音に
+  noiseHit(ac, t, { dur: 0.035, freq: 2500 * v, q: 0.8, peak: 0.5 });              // 活字が紙を打つ「カ」
+  noiseHit(ac, t + 0.012, { dur: 0.06, freq: 350 * v, q: 1.5, peak: 0.6 });        // 本体の「ッ」
+  const o = ac.createOscillator(), g = ac.createGain();                            // 低い「トン」
+  o.frequency.setValueAtTime(140 * v, t); o.frequency.exponentialRampToValueAtTime(60, t + 0.05);
+  g.gain.setValueAtTime(0.4, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + 0.07);
+}
+function soundBell(delay = 0) {
+  const ac = audio(); if (!ac) return;
+  const t = ac.currentTime + delay;
+  for (const [f, a, d] of [[2093, 0.25, 1.4], [5320, 0.08, 0.6], [3870, 0.05, 0.9]]) {   // ベルの倍音(整数倍でない)
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.type = "sine"; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(a, t + 0.003);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + d);
+    o.connect(g).connect(ac.destination); o.start(t); o.stop(t + d);
+  }
+}
+function soundReturn() {
+  const ac = audio(); if (!ac) return;
+  const t = ac.currentTime + 0.15;
+  for (let i = 0; i < 9; i++) noiseHit(ac, t + i * 0.028, { dur: 0.025, freq: 1800 + i * 60, q: 2, peak: 0.12 });   // ラチェットのジジジ
+  noiseHit(ac, t + 0.27, { dur: 0.08, freq: 300, q: 1.2, peak: 0.6 });              // 端に当たる「ガチャン」
+}
+function soundNewLine() { soundBell(); soundReturn(); }
+
 // 紙がいっぱい: それまでの字を書き終えたら、ライブを終えて待機位置へ戻り、ペンを下ろす(lend。機械の parkNow)
 async function livePaperFull() {
   if (liveFull) return;
   liveFull = true;
+  soundBell(); soundBell(0.35);
   textLiveInput.value = "";
   textLiveStatus.textContent = "紙がいっぱいです。待機位置に戻ります(新しい紙にして、もう一度ライブ開始)";
   liveFinish();
@@ -504,11 +599,11 @@ async function liveType(ch) {
   const size = liveSize(), gap = size * TEXT_LINE_GAP;
   const font = await loadTextFont(TEXT_DEFAULT_FONT);
   ch = fontChar(font, ch) ?? ch;   // 全角数字などは、フォントにある字に直す
-  if (ch === "\n") { liveCursor.line++; liveCursor.pos = 0; return; }
+  if (ch === "\n") { liveCursor.line++; liveCursor.pos = 0; soundNewLine(); return; }
   const half = isHalfWidth(ch);
-  const adv = (ch === " " ? 0.4 : ch === "\u3000" ? 1 : half ? 0.6 : 1) * size;
+  const adv = charAdvance(ch) * size;
   const lineLen = textVertical ? h - 2 * TEXT_PAD_MM : w - 2 * TEXT_PAD_MM;
-  if (liveCursor.pos > 0 && liveCursor.pos + adv > lineLen) { liveCursor.line++; liveCursor.pos = 0; }   // 端で折り返す
+  if (liveCursor.pos > 0 && liveCursor.pos + adv > lineLen) { liveCursor.line++; liveCursor.pos = 0; soundNewLine(); }   // 端で折り返す
   // 字の枠の左上(描ける範囲の座標)
   let left, top;
   if (textVertical) {
@@ -521,6 +616,7 @@ async function liveType(ch) {
     if (top + size > h) { livePaperFull(); return; }
   }
   liveCursor.pos += adv;
+  soundKey();   // 空白も、ない字も、打った音はする
   if (ch === " " || ch === "\u3000") return;
   if (!font.has.has(ch)) { textWarn.textContent = `「${ch}」の字はないので空けました。`; return; }
   const em = font.em, k = size / em;
