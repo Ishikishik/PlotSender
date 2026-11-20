@@ -23,14 +23,6 @@ const TEXT_FONTS = ["klee"];          // フォント(番号は機械の STROKE_
 const TEXT_DEFAULT_FONT = "klee";
 const TEXT_ASCENT = 0.88;             // 横書きで、基準線から字の枠の上までの高さ(字の大きさに対する割合)
 const TEXT_SAMPLE_MM = 0.3;           // 図形(path など)を折れ線にする間隔 [mm]
-const TEXT_SVG_SAMPLE = `<svg viewBox="0 0 91 55">
-  <rect x="2" y="2" width="87" height="51" />
-  <text x="8" y="20" font-size="9">山田 太郎</text>
-  <line x1="8" y1="23" x2="55" y2="23" />
-  <text x="8" y="30" font-size="3.5">ペンプロッター研究会</text>
-  <text x="8" y="44" font-size="3">〒100-0001 東京都千代田区</text>
-  <text x="82" y="8" font-size="5" writing-mode="vertical-rl">和の心</text>
-</svg>`;
 
 const textFonts = {};
 // フォントの字の一覧を読む(1 回だけ) → { em, has: Set }
@@ -445,7 +437,7 @@ function updateTextSendButton() {
   textSendButton.disabled = textBusy || !textData || !textData.items.length || !textNameInput.value.trim() || !plotSendToken();
 }
 
-textSvgInput.placeholder = "ここに文字を打つ(<svg から始めると SVG として読みます)\n\nSVG の例:\n" + TEXT_SVG_SAMPLE;
+textSvgInput.placeholder = "ここに文字を打つ";
 let textComposing = false;   // 日本語入力の変換中(確定するまでライブでは送らない)
 textSvgInput.addEventListener("compositionstart", () => { textComposing = true; });
 textSvgInput.addEventListener("compositionend", () => {
