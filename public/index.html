@@ -89,10 +89,7 @@
         <input id="text-live-input" type="text" autocomplete="off" placeholder="ここに打つと、確定した字から機械が書きます(Enter で改行)" hidden>
         <p>打った文字を、書き順どおりにペンで書きます。横書き・縦書きと大きさは上のボタンで選びます。
           ライブ: PC で「ESP32と接続」してから「ライブ開始」を押すと、タイプライターのように、打つそばから機械が 1 字ずつ書きます
-          (紙の左上・縦書きは右上から。Enter で改行、端で折り返し。書いた字は消せません)。<br>
-          SVG(&lt;svg&gt; から始める)も書けます。1 = 1 mm、viewBox の大きさで紙の真ん中に置きます。
-          使えるもの: &lt;text&gt;(x, y, font-size, writing-mode="vertical-rl", letter-spacing, text-anchor, transform)、
-          &lt;tspan&gt;、&lt;line&gt; &lt;rect&gt; &lt;circle&gt; &lt;ellipse&gt; &lt;polyline&gt; &lt;polygon&gt; &lt;path&gt;。書いた順に描きます。</p>
+          (紙の左上・縦書きは右上から。Enter で改行、端で折り返し。書いた字は消せません)。</p>
         <textarea id="text-svg" rows="8" spellcheck="false"></textarea>
         <canvas id="text-preview"></canvas>
         <p id="text-warn" role="status" aria-live="polite"></p>
