@@ -10,6 +10,9 @@ const downloadPlotButton = document.querySelector("#download-plot");
 // marginLeft / marginRight: 紙の左右で、腕が届かない所を空ける幅 [mm]。機械の寸法(補正データ)から sdsend.js の
 // updateReachMargins が計算して書き換える(読めるまでは 3 mm ずつ)。届かない点があると、機械はそこを飛ばして描く
 const PAPER_OPTIONS = { paperWidth: 140, paperHeight: 75, minStrokeMm: 0.4, marginLeft: 3, marginRight: 3 };
+// 前の線の終わりから次の線の始まりまでがこの距離以内で、間が元の画像の黒なら、ペンを上げずにつなぐ [mm]
+// (交点で分かれた線どうし。library.js の markJoins)。ページの URL に ?join=2 のように付けると、その値で試せる
+const JOIN_MAX_MM = (v => Number.isFinite(v) && v >= 0 ? v : 1.5)(parseFloat(new URLSearchParams(location.search).get("join")));
 const paperStatus = document.querySelector("#paper-status");
 
 const VECTORIZE_MAX_SIZE = 1024;
@@ -145,8 +148,8 @@ async function vectorizeImage(blob) {
     settings.fillCoreWidth = Math.max(3, Math.round(penPx * 2));
     settings.fillMinMaxWidth = Math.max(settings.fillCoreWidth + 2, Math.round(penPx * 3.5));
     settings.fillMinArea = Math.max(40, Math.round((penPx * 4) ** 2));
-    // 1.5 mm 以内で、間が元の画像の黒なら、ペンを上げずにつなぐ(交点で分かれた線どうし)
-    settings.joinMaxPx = Math.max(2, Math.round(1.5 / mmPerPx));
+    // JOIN_MAX_MM 以内で、間が元の画像の黒なら、ペンを上げずにつなぐ(交点で分かれた線どうし)
+    settings.joinMaxPx = Math.max(2, Math.round(JOIN_MAX_MM / mmPerPx));
     // 縦横 3 mm 以内の孤立した塊(口、鼻など)は、短くても線として残す。点は 0.5 mm の短い線で打つ
     settings.smallFeatureMaxPx = Math.round(3 / mmPerPx);
     settings.dotLengthPx = Math.max(2, Math.round(0.5 / mmPerPx));
