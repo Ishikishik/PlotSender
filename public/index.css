@@ -175,6 +175,19 @@ h1 {
   cursor: not-allowed;
 }
 
+.join-mm {
+  display: block;
+  margin: 8px 0;
+}
+
+#join-mm {
+  width: 4em;
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid black;
+  border-radius: 4px;
+}
+
 .send-plot {
   display: flex;
   flex-wrap: wrap;
